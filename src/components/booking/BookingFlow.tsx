@@ -361,7 +361,7 @@ export function BookingFlow({
   return (
     <div className="md:grid md:grid-cols-[1fr_20rem] md:gap-8">
       {/* Κύρια ροή */}
-      <div className="pb-28 md:pb-0">
+      <div className="pb-6 md:pb-0">
         <Stepper steps={steps} current={stepIdx} />
 
         {step === "service" && (
@@ -430,16 +430,6 @@ export function BookingFlow({
       <aside className="hidden md:block">
         <div className="sticky top-24">{summary}</div>
       </aside>
-
-      {/* Σταθερή κάτω μπάρα (mobile) */}
-      <MobileBar
-        priceLabel={totalPriceLabel}
-        durationLabel={totalDurationLabel}
-        step={step}
-        canContinue={canContinue}
-        submitting={submitting}
-        onPrimary={primaryAction}
-      />
     </div>
   );
 }
@@ -539,8 +529,8 @@ function ServiceStep({
           );
         })}
       </div>
-      {/* Κουμπί συνέχειας (ορατό και εδώ· η δεξιά σύνοψη/κάτω μπάρα έχουν επίσης). */}
-      <div className="mt-6 hidden justify-end md:flex">
+      {/* Κουμπί συνέχειας — πάντα ορατό σε κάθε πλάτος. */}
+      <div className="mt-6 flex justify-end">
         <button
           type="button"
           disabled={selectedIds.length === 0}
@@ -734,7 +724,7 @@ function WhenStep(props: {
           type="button"
           disabled={!time}
           onClick={props.onContinue}
-          className="hidden rounded-full bg-bronze px-7 py-3 text-base font-semibold text-ink-950 disabled:opacity-40 md:block"
+          className="rounded-full bg-bronze px-7 py-3 text-base font-semibold text-ink-950 transition-colors hover:bg-bronze-light disabled:opacity-40"
         >
           Συνέχεια
         </button>
@@ -863,7 +853,7 @@ function DetailsStep(props: {
         <button
           type="submit"
           disabled={props.submitting}
-          className="hidden rounded-full bg-bronze px-7 py-3 text-base font-semibold text-ink-950 disabled:opacity-50 md:block"
+          className="rounded-full bg-bronze px-7 py-3 text-base font-semibold text-ink-950 transition-colors hover:bg-bronze-light disabled:opacity-50"
         >
           {props.submitting ? "Γίνεται κράτηση…" : "Επιβεβαίωση ραντεβού"}
         </button>
@@ -946,50 +936,6 @@ function SummaryItem({ label, value, onChange }: { label: string; value: string;
         </button>
       )}
     </li>
-  );
-}
-
-function MobileBar({
-  priceLabel,
-  durationLabel,
-  step,
-  canContinue,
-  submitting,
-  onPrimary,
-}: {
-  priceLabel: string | null;
-  durationLabel: string | null;
-  step: StepKey;
-  canContinue: boolean;
-  submitting: boolean;
-  onPrimary: () => void;
-}) {
-  // Στο βήμα «κουρέας» η επιλογή προχωρά αυτόματα — δεν χρειάζεται μπάρα.
-  if (step === "barber") return null;
-  const showButton = step === "service" || step === "when" || step === "details";
-  const label = step === "details" ? (submitting ? "Γίνεται κράτηση…" : "Επιβεβαίωση") : "Συνέχεια";
-  return (
-    <div
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-bronze/20 bg-ink-950/95 px-4 py-3 backdrop-blur md:hidden"
-      style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
-    >
-      <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
-        <div>
-          <p className="font-display text-lg font-semibold text-bone">{priceLabel ?? "—"}</p>
-          {durationLabel && <p className="text-xs text-bone-dim">{durationLabel} · στο κατάστημα</p>}
-        </div>
-        {showButton && (
-          <button
-            type="button"
-            disabled={!canContinue || submitting}
-            onClick={onPrimary}
-            className="rounded-full bg-bronze px-6 py-3 text-base font-semibold text-ink-950 disabled:opacity-40"
-          >
-            {label}
-          </button>
-        )}
-      </div>
-    </div>
   );
 }
 

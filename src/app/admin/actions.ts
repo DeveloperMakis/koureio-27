@@ -10,6 +10,7 @@ import { notifyCancellationSms } from "@/lib/notify";
 import { enqueueNotification } from "@/lib/notify-events";
 import { createOffer } from "@/lib/waitlist-offer";
 import { greekHolidays } from "@/lib/greek-holidays";
+import { setToken, syncInstagram } from "@/lib/instagram";
 
 async function guard() {
   const id = await getCurrentAdminId();
@@ -161,6 +162,26 @@ export async function deletePromotionAction(formData: FormData) {
   if (!id) return;
   await prisma.promotion.delete({ where: { id } }).catch(() => {});
   revalidatePath("/admin/promotions");
+}
+
+// ---- Instagram ----
+
+export async function setInstagramTokenAction(formData: FormData) {
+  await guard();
+  const token = String(formData.get("token") ?? "").trim();
+  if (token.length < 20) return;
+  await setToken(token);
+  // Πρώτος συγχρονισμός αμέσως.
+  await syncInstagram().catch(() => {});
+  revalidatePath("/admin/instagram");
+  revalidatePublic();
+}
+
+export async function syncInstagramAction() {
+  await guard();
+  await syncInstagram().catch(() => {});
+  revalidatePath("/admin/instagram");
+  revalidatePublic();
 }
 
 /**

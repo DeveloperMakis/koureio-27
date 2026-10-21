@@ -26,3 +26,6 @@
 npm-debug.log*
 /coverage
 next-env.d.ts
+
+# Instagram τοπικό cache (dev)
+.instagram-cache

@@ -12,6 +12,7 @@ import { bookingConfig } from "@/config/booking";
 import { enqueueNotification } from "@/lib/notify-events";
 import { sendPushToCustomer } from "@/lib/push";
 import { expireOffers } from "@/lib/waitlist-offer";
+import { maybeSyncInstagram } from "@/lib/instagram";
 import { athensParts, formatAthensDateLong, formatAthensTime } from "@/lib/datetime";
 
 const MAX_ATTEMPTS = 5;
@@ -126,5 +127,7 @@ export async function runWorker(): Promise<{ expiredOffers: number; reminders: n
   const o = await expireOffers();
   const r = await scanReminders();
   const p = await processOutbox();
+  // Συγχρονισμός Instagram με throttle (κάθε ~6 ώρες) — δεν μπλοκάρει τον worker.
+  await maybeSyncInstagram().catch(() => {});
   return { expiredOffers: o.expired, reminders: r.enqueued, ...p };
 }

@@ -9,13 +9,22 @@ import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { Faq } from "@/components/Faq";
 import { ReviewsSection } from "@/components/ReviewsSection";
 import { ContactSection } from "@/components/ContactSection";
+import { getGalleryMedia } from "@/lib/instagram";
 
 // Η αρχική διαβάζει ενεργές υπηρεσίες από τη βάση και δείχνει «Ανοιχτά τώρα»·
 // render ανά αίτημα (όχι static) ώστε να είναι πάντα ενημερωμένη.
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
+export default async function HomePage() {
   const confirmedFaqs = faqs.filter((f) => f.confirmed);
+
+  // Gallery: προτεραιότητα στις φωτογραφίες Instagram (αν έχει ρυθμιστεί),
+  // αλλιώς οι στατικές φωτογραφίες της επιχείρησης.
+  const igGallery = await getGalleryMedia(12);
+  const galleryImages =
+    igGallery.length > 0
+      ? igGallery.map((m) => ({ src: m.src, alt: m.alt }))
+      : photos.gallery.map((p) => ({ src: p.src, alt: p.alt }));
 
   return (
     <>
@@ -118,7 +127,7 @@ export default function HomePage() {
         <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 md:py-24">
           <SectionHeading eyebrow={galleryContent.subtitle} title={galleryContent.title} />
           <div className="mt-10">
-            <GalleryCarousel images={photos.gallery} placeholderCount={galleryContent.placeholderCount} />
+            <GalleryCarousel images={galleryImages} placeholderCount={galleryContent.placeholderCount} />
           </div>
           {business.social.instagram && (
             <div className="mt-8 text-center">

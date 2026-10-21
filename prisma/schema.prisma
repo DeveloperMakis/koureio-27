@@ -245,6 +245,28 @@ model NotificationLog {
   @@index([status])
 }
 
+/// Γενικές ρυθμίσεις key/value (π.χ. Instagram token) — server-side μυστικά.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// Cache φωτογραφιών Instagram. Οι εικόνες κατεβαίνουν τοπικά στο volume ώστε να
+/// μη «σπάνε» όταν λήγουν τα προσωρινά URL της Meta.
+model InstagramMedia {
+  id         String   @id // IG media id
+  mediaType  String // IMAGE | VIDEO | CAROUSEL_ALBUM
+  caption    String?
+  permalink  String
+  takenAt    DateTime // timestamp της δημοσίευσης
+  localPath  String? // διαδρομή αρχείου στο volume (όταν κατέβει)
+  order      Int      @default(0)
+  syncedAt   DateTime @default(now())
+
+  @@index([order])
+}
+
 /// Γραμμή υπηρεσίας μέσα σε ένα ραντεβού (στιγμιότυπο τιμής/διάρκειας/ονόματος).
 model BookingService {
   id          String  @id @default(cuid())
