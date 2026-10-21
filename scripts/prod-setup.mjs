@@ -112,7 +112,20 @@ async function seedHolidays() {
   }
 }
 
-async function main() {
+/** Δημιουργεί/ενημερώνει τον admin από τα env (ΠΡΩΤΟ βήμα — ποτέ να μη μπλοκάρεται). */
+async function ensureAdmin() {
+  const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD || "";
+  if (!email || password.length < 8) {
+    console.log("⚠ ADMIN_EMAIL/ADMIN_PASSWORD δεν δόθηκαν — παράλειψη admin.");
+    return;
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  await prisma.admin.upsert({ where: { email }, update: { passwordHash }, create: { email, passwordHash } });
+  console.log("✔ Admin έτοιμος:", email);
+}
+
+async function ensureServices() {
   for (const s of services) {
     await prisma.service.upsert({
       where: { slug: s.slug },
@@ -120,28 +133,34 @@ async function main() {
       create: { slug: s.slug, name: s.name, description: s.description, durationMin: s.durationMin, priceCents: null, active: false, order: s.order },
     });
   }
+}
 
-  let barber = await prisma.barber.findFirst({ orderBy: { order: "asc" } });
-  if (!barber) {
-    barber = await prisma.barber.create({ data: { name: "Γιώργος", active: true, order: 1 } });
-    for (const [day, intervals] of Object.entries(hours)) {
-      for (const [open, close] of intervals) {
-        await prisma.barberSchedule.create({ data: { barberId: barber.id, dayOfWeek: Number(day), open, close } });
-      }
+async function ensureBarber() {
+  const barber = await prisma.barber.findFirst({ orderBy: { order: "asc" } });
+  if (barber) return;
+  const created = await prisma.barber.create({ data: { name: "Γιώργος", active: true, order: 1 } });
+  for (const [day, intervals] of Object.entries(hours)) {
+    for (const [open, close] of intervals) {
+      await prisma.barberSchedule.create({ data: { barberId: created.id, dayOfWeek: Number(day), open, close } });
     }
   }
+}
 
-  // Ελληνικές αργίες (τρέχον + επόμενο έτος) — idempotent.
-  await seedHolidays();
-
-  const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD || "";
-  if (email && password.length >= 8) {
-    const passwordHash = await bcrypt.hash(password, 12);
-    await prisma.admin.upsert({ where: { email }, update: { passwordHash }, create: { email, passwordHash } });
-    console.log("✔ Admin έτοιμος:", email);
+async function main() {
+  // Κάθε βήμα απομονωμένο: αποτυχία ενός ΔΕΝ εμποδίζει τα υπόλοιπα (ειδικά τον admin).
+  const steps = [
+    ["admin", ensureAdmin],
+    ["services", ensureServices],
+    ["barber", ensureBarber],
+    ["holidays", seedHolidays],
+  ];
+  for (const [name, fn] of steps) {
+    try {
+      await fn();
+    } catch (e) {
+      console.error(`✖ Βήμα "${name}" απέτυχε (συνεχίζουμε):`, e?.message ?? e);
+    }
   }
-
   console.log("✔ Prod setup ολοκληρώθηκε.");
 }
 
