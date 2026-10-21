@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.env
+.env.*
+mobile
+*.db
+*.db-journal
+prisma/dev.db
+npm-debug.log*
+.DS_Store
+tsconfig.tsbuildinfo
+README.md
+MOBILE.md
+BOOKING-UPGRADE.md
+PHOTO-REQUEST.md
+DEPLOY-COOLIFY.md

@@ -1,0 +1,285 @@
+// ΤΟ ΚΟΥΡΕΙΟΝ 27 — Prisma schema
+//
+// Τοπική ανάπτυξη: SQLite (provider = "sqlite", DATABASE_URL="file:./dev.db").
+// Παραγωγή: αλλάξτε provider σε "postgresql" και το DATABASE_URL. Τα μοντέλα
+// είναι συμβατά και με τα δύο (ο κανόνας μοναδικότητας βασίζεται σε nullable
+// unique column `slotKey`, που λειτουργεί σε SQLite και PostgreSQL).
+
+generator client {
+  provider      = "prisma-client-js"
+  // native για τοπική ανάπτυξη (Windows) + Linux για το Docker image (Coolify).
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+model Barber {
+  id        String            @id @default(cuid())
+  name      String
+  active    Boolean           @default(true)
+  order     Int               @default(0)
+  createdAt DateTime          @default(now())
+
+  schedules   BarberSchedule[]
+  bookings    Booking[]
+  closures    Closure[]
+  favoritedBy Customer[]       @relation("CustomerFavorite")
+}
+
+/// Εβδομαδιαίο ωράριο εργασίας ανά κουρέα (dayOfWeek: 0=Κυρ ... 6=Σαβ).
+/// Αν δεν υπάρχει εγγραφή για μια ημέρα, ο κουρέας δεν εργάζεται εκείνη την ημέρα.
+model BarberSchedule {
+  id        String @id @default(cuid())
+  barber    Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  barberId  String
+  dayOfWeek Int
+  open      String // "HH:mm" τοπική ώρα Αθήνας
+  close     String // "HH:mm"
+
+  @@unique([barberId, dayOfWeek, open])
+  @@index([barberId])
+}
+
+model Service {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  name        String
+  description String
+  durationMin Int
+  priceCents  Int? // null = δεν έχει οριστεί τιμή
+  active      Boolean   @default(false)
+  recommended Boolean   @default(false) // εμφανίζεται πρώτη ως «προτεινόμενη»
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  bookings    Booking[]
+  waitlist    Waitlist[]
+}
+
+/// Κλείσιμο ωρών/ημερών, άδειες, εξαιρέσεις. barberId null = αφορά όλο το κατάστημα.
+model Closure {
+  id       String   @id @default(cuid())
+  barber   Barber?  @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  barberId String?
+  startAt  DateTime // UTC
+  endAt    DateTime // UTC
+  reason   String?
+  createdAt DateTime @default(now())
+
+  @@index([startAt])
+  @@index([barberId])
+}
+
+model Booking {
+  id            String   @id @default(cuid())
+  code          String   @unique // ανθρώπινος κωδικός κράτησης, π.χ. K27-ABC123
+  cancelToken   String   @unique // μυστικό για ασφαλή σύνδεσμο αλλαγής/ακύρωσης
+
+  service       Service  @relation(fields: [serviceId], references: [id])
+  serviceId     String
+  barber        Barber   @relation(fields: [barberId], references: [id])
+  barberId      String
+
+  // Σύνδεση με συνδεδεμένο πελάτη (app). null = guest κράτηση από website.
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  customerId    String?
+
+  startAt       DateTime // UTC
+  endAt         DateTime // UTC
+
+  // Στιγμιότυπο υπηρεσίας τη στιγμή της κράτησης (για ιστορικό/τιμή).
+  serviceName   String
+  priceCents    Int?
+  durationMin   Int
+
+  customerName  String
+  customerPhone String
+  customerEmail String?
+  notes         String?
+
+  status        String   @default("CONFIRMED") // CONFIRMED | CANCELLED | COMPLETED | NO_SHOW
+  source        String   @default("online")    // online | admin
+
+  /// Κλειδί slot (`barberId|startAtISO`) για ενεργές κρατήσεις. Γίνεται NULL
+  /// στην ακύρωση ώστε να ελευθερώνεται η ώρα. Η μοναδικότητα εμποδίζει
+  /// ταυτόχρονες διπλοκρατήσεις ΙΔΙΑΣ ώρας· οι επικαλύψεις ελέγχονται
+  /// επιπλέον μέσα σε transaction στον server.
+  slotKey       String?  @unique
+
+  /// Κλειδί idempotency: αποτρέπει διπλή δημιουργία από διπλό πάτημα/retry.
+  idempotencyKey String? @unique
+
+  notifications NotificationLog[]
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([barberId, startAt])
+  @@index([startAt])
+  @@index([status])
+  @@index([customerId])
+}
+
+// ===========================================================================
+// MOBILE / ΠΕΛΑΤΗΣ — μοντέλα για την εφαρμογή (auth, push, inbox, outbox)
+// ===========================================================================
+
+/// Λογαριασμός πελάτη της εφαρμογής (ξεχωριστός από τον Admin του website).
+model Customer {
+  id               String   @id @default(cuid())
+  email            String   @unique
+  passwordHash     String
+  name             String
+  phone            String?
+  emailVerified    Boolean  @default(false)
+  favoriteBarber   Barber?  @relation("CustomerFavorite", fields: [favoriteBarberId], references: [id])
+  favoriteBarberId String?
+  notifyPush       Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  bookings      Booking[]
+  sessions      MobileSession[]
+  devices       DeviceRegistration[]
+  notifications InAppNotification[]
+}
+
+/// Ανακλητό session κινητού (refresh token αποθηκεύεται ΜΟΝΟ ως hash).
+model MobileSession {
+  id               String    @id @default(cuid())
+  customer         Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerId       String
+  refreshTokenHash String    @unique
+  userAgent        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  lastUsedAt       DateTime  @default(now())
+
+  @@index([customerId])
+}
+
+/// Εγγραφή συσκευής για push (Expo push token) — πολλές συσκευές ανά πελάτη.
+model DeviceRegistration {
+  id             String    @id @default(cuid())
+  customer       Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerId     String
+  expoPushToken  String
+  platform       String // "ios" | "android"
+  installationId String
+  disabledAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([customerId, installationId])
+  @@index([expoPushToken])
+}
+
+/// Μόνιμο inbox ειδοποιήσεων μέσα στην εφαρμογή.
+model InAppNotification {
+  id         String    @id @default(cuid())
+  customer   Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerId String
+  type       String // confirmation | reminder | change | cancellation | waitlist_offer
+  title      String
+  body       String
+  bookingId  String?
+  data       String? // JSON (deep-link payload)
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([customerId, createdAt])
+  @@index([customerId, readAt])
+}
+
+/// Transactional outbox: η αποθήκευση κράτησης + το συμβάν ειδοποίησης στην
+/// ίδια συναλλαγή. Ο worker διαβάζει και στέλνει, με idempotency (dedupeKey).
+model NotificationOutbox {
+  id          String    @id @default(cuid())
+  customerId  String?
+  bookingId   String?
+  type        String
+  channels    String // CSV: "push,inapp"
+  dedupeKey   String    @unique
+  payload     String // JSON
+  status      String    @default("PENDING") // PENDING | PROCESSING | SENT | FAILED | SKIPPED
+  attempts    Int       @default(0)
+  scheduledAt DateTime  @default(now())
+  processedAt DateTime?
+  error       String?
+  createdAt   DateTime  @default(now())
+
+  @@index([status, scheduledAt])
+  @@index([bookingId])
+}
+
+/// Αρχείο ειδοποιήσεων (email/SMS) ανά κράτηση — για αποφυγή διπλής αποστολής,
+/// εμφάνιση αποτυχιών και επανάληψη.
+model NotificationLog {
+  id        String   @id @default(cuid())
+  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  bookingId String
+  channel   String // "sms" | "email"
+  type      String // "cancellation" | "confirmation" | "reminder"
+  status    String // "sent" | "failed" | "skipped_no_provider"
+  to        String?
+  error     String?
+  createdAt DateTime @default(now())
+
+  @@index([bookingId])
+  @@index([status])
+}
+
+/// Αίτημα λίστας αναμονής (ΔΕΝ είναι επιβεβαιωμένο ραντεβού).
+model Waitlist {
+  id            String   @id @default(cuid())
+  service       Service  @relation(fields: [serviceId], references: [id])
+  serviceId     String
+  barberId      String? // null = χωρίς προτίμηση
+  dateFrom      String // "YYYY-MM-DD" (ώρα Αθήνας)
+  dateTo        String // "YYYY-MM-DD"
+  timeFrom      String? // "HH:mm" αποδεκτό εύρος ώρας
+  timeTo        String?
+  customerName  String
+  customerPhone String
+  customerId    String? // αν μπήκε συνδεδεμένος πελάτης (app)
+  status        String   @default("OPEN") // OPEN | OFFERED | CONVERTED | CLOSED
+  createdAt     DateTime @default(now())
+
+  offers        WaitlistOffer[]
+
+  @@index([status])
+  @@index([serviceId])
+}
+
+/// Προσφορά θέσης σε αίτημα λίστας αναμονής. Λειτουργεί ως ΠΡΟΣΩΡΙΝΗ ΚΡΑΤΗΣΗ
+/// (hold) με πραγματική server-side λήξη. ΔΕΝ είναι επιβεβαιωμένο ραντεβού μέχρι
+/// την αποδοχή.
+model WaitlistOffer {
+  id         String    @id @default(cuid())
+  waitlist   Waitlist? @relation(fields: [waitlistId], references: [id], onDelete: SetNull)
+  waitlistId String?
+  customerId String? // στόχος (για push/inbox)
+  serviceId  String
+  barberId   String
+  startAt    DateTime // UTC — η προσφερόμενη ώρα (hold)
+  endAt      DateTime
+  token      String    @unique // ασφαλής, μη προβλέψιμος σύνδεσμος αποδοχής
+  status     String    @default("PENDING") // PENDING | ACCEPTED | DECLINED | EXPIRED | CANCELLED
+  expiresAt  DateTime
+  bookingId  String? // όταν γίνει αποδεκτή
+  createdAt  DateTime  @default(now())
+
+  @@index([status, expiresAt])
+  @@index([barberId, startAt])
+}
