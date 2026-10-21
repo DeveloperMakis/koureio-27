@@ -618,6 +618,11 @@ function WhenStep(props: {
   const today = dates[0]?.value;
   const tomorrow = dates[1]?.value;
   const grouped = groupSlots(slots);
+  const stripRef = useRef<HTMLDivElement>(null);
+
+  function scrollDays(dir: 1 | -1) {
+    stripRef.current?.scrollBy({ left: dir * 240, behavior: "smooth" });
+  }
 
   return (
     <div>
@@ -652,8 +657,30 @@ function WhenStep(props: {
         )}
       </div>
 
-      {/* Λωρίδα ημερών */}
-      <div className="mt-4 flex gap-2 overflow-x-auto pb-2 no-scrollbar" role="listbox" aria-label="Ημερομηνία">
+      {/* Λωρίδα ημερών με βελάκια πλοήγησης (για μεταγενέστερες μέρες) */}
+      <div className="relative mt-4">
+        <button
+          type="button"
+          onClick={() => scrollDays(-1)}
+          aria-label="Προηγούμενες ημέρες"
+          className="absolute left-0 top-1/2 z-10 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full border border-bronze/30 bg-ink-950/90 text-bone backdrop-blur hover:bg-ink-900"
+        >
+          ‹
+        </button>
+        <button
+          type="button"
+          onClick={() => scrollDays(1)}
+          aria-label="Επόμενες ημέρες"
+          className="absolute right-0 top-1/2 z-10 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full border border-bronze/30 bg-ink-950/90 text-bone backdrop-blur hover:bg-ink-900"
+        >
+          ›
+        </button>
+        <div
+          ref={stripRef}
+          className="flex gap-2 overflow-x-auto scroll-smooth px-11 pb-2 no-scrollbar"
+          role="listbox"
+          aria-label="Ημερομηνία"
+        >
         {dates.map((d) => {
           const active = date === d.value;
           return (
@@ -677,6 +704,7 @@ function WhenStep(props: {
             </button>
           );
         })}
+        </div>
       </div>
 
       {/* Ώρες */}
