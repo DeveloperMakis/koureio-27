@@ -119,6 +119,9 @@ model Booking {
   /// Κλειδί idempotency: αποτρέπει διπλή δημιουργία από διπλό πάτημα/retry.
   idempotencyKey String? @unique
 
+  /// Σύνδεσμος σειράς επαναλαμβανόμενων ραντεβού (null = μεμονωμένο).
+  seriesId      String?
+
   notifications NotificationLog[]
 
   // Πολλαπλές υπηρεσίες ανά ραντεβού (π.χ. κούρεμα + ξύρισμα). Το `serviceId`
@@ -133,6 +136,21 @@ model Booking {
   @@index([startAt])
   @@index([status])
   @@index([customerId])
+  @@index([seriesId])
+}
+
+/// Πρόκληση επιβεβαίωσης τηλεφώνου με κωδικό SMS (OTP). Αποτρέπει άσκοπες/ψεύτικες
+/// κρατήσεις από νέα τηλέφωνα. Ο κωδικός αποθηκεύεται ΜΟΝΟ ως hash.
+model OtpChallenge {
+  id         String    @id @default(cuid())
+  phone      String // κανονικοποιημένο (μόνο ψηφία)
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([phone, createdAt])
 }
 
 // ===========================================================================

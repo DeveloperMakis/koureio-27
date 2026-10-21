@@ -11,6 +11,7 @@ import { enqueueNotification } from "@/lib/notify-events";
 import { createOffer } from "@/lib/waitlist-offer";
 import { greekHolidays } from "@/lib/greek-holidays";
 import { setToken, syncInstagram } from "@/lib/instagram";
+import { setOtpEnabled } from "@/lib/otp";
 
 async function guard() {
   const id = await getCurrentAdminId();
@@ -216,6 +217,15 @@ export async function syncInstagramAction() {
   await syncInstagram().catch(() => {});
   revalidatePath("/admin/instagram");
   revalidatePublic();
+}
+
+// ---- Ρυθμίσεις / ασφάλεια κρατήσεων ----
+
+export async function setOtpEnabledAction(formData: FormData) {
+  await guard();
+  const on = formData.get("enabled") === "on" || formData.get("enabled") === "true";
+  await setOtpEnabled(on);
+  revalidatePath("/admin/settings");
 }
 
 /**

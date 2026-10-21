@@ -16,30 +16,51 @@ export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
   if (q.length < 2) return NextResponse.json({ ok: true, results: [] });
 
-  // Φέρε πρόσφατες κρατήσεις που ταιριάζουν σε όνομα ή τηλέφωνο.
+  // Φέρε κρατήσεις που ταιριάζουν σε όνομα ή τηλέφωνο.
   const rows = await prisma.booking.findMany({
     where: {
       OR: [{ customerName: { contains: q } }, { customerPhone: { contains: q } }],
     },
-    select: { customerName: true, customerPhone: true, createdAt: true },
-    orderBy: { createdAt: "desc" },
-    take: 60,
+    select: { customerName: true, customerPhone: true, startAt: true, status: true, serviceName: true },
+    orderBy: { startAt: "desc" },
+    take: 300,
   });
 
-  // Case-insensitive φιλτράρισμα + dedupe (όνομα+τηλέφωνο).
+  // Case-insensitive φιλτράρισμα + ομαδοποίηση (όνομα+τηλέφωνο) με στατιστικά.
   const ql = q.toLowerCase();
-  const seen = new Set<string>();
-  const results: { name: string; phone: string }[] = [];
+  const map = new Map<
+    string,
+    { name: string; phone: string; visits: number; lastVisit: string | null; lastService: string | null }
+  >();
   for (const r of rows) {
     const name = r.customerName ?? "";
     const phone = r.customerPhone ?? "";
     if (!name.toLowerCase().includes(ql) && !phone.toLowerCase().includes(ql)) continue;
     const key = `${name}|${phone}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    results.push({ name, phone });
-    if (results.length >= 8) break;
+    const prev = map.get(key);
+    const completed = r.status === "COMPLETED" || r.status === "CONFIRMED";
+    if (!prev) {
+      map.set(key, {
+        name,
+        phone,
+        visits: completed ? 1 : 0,
+        lastVisit: completed ? r.startAt.toISOString() : null,
+        lastService: completed ? r.serviceName : null,
+      });
+    } else {
+      if (completed) {
+        prev.visits += 1;
+        if (!prev.lastVisit || r.startAt.toISOString() > prev.lastVisit) {
+          prev.lastVisit = r.startAt.toISOString();
+          prev.lastService = r.serviceName;
+        }
+      }
+    }
   }
+
+  const results = Array.from(map.values())
+    .sort((a, b) => (b.lastVisit ?? "").localeCompare(a.lastVisit ?? ""))
+    .slice(0, 10);
 
   return NextResponse.json({ ok: true, results });
 }

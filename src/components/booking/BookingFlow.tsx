@@ -48,6 +48,7 @@ interface Confirmation {
   dateLabel: string;
   time: string;
   notifications: { email: string; sms: string };
+  series?: { booked: string[]; skipped: string[] } | null;
 }
 
 /* --------------------------- Βοηθητικά --------------------------- */
@@ -137,6 +138,12 @@ export function BookingFlow({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const idemRef = useRef<string>(uid());
+
+  // Επανάληψη ραντεβού + επιβεβαίωση τηλεφώνου (OTP) για νέους πελάτες.
+  const [repeat, setRepeat] = useState<"none" | "2w" | "3w" | "1m">("none");
+  const [otpMode, setOtpMode] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpMessage, setOtpMessage] = useState<string | null>(null);
 
   // Επιλεγμένες υπηρεσίες (σε σειρά) + αθροίσματα.
   const selectedServices = useMemo(
@@ -271,9 +278,18 @@ export function BookingFlow({
           customerEmail: email || undefined,
           notes: notes || undefined,
           website,
+          repeat,
+          otpCode: otpCode || undefined,
         }),
       });
       const data = await res.json();
+      // Χρειάζεται επιβεβαίωση με SMS (νέο τηλέφωνο).
+      if (data.needsOtp) {
+        setOtpMode(true);
+        setOtpMessage(data.message ?? null);
+        setSubmitError(data.message ? null : data.error ?? null);
+        return;
+      }
       if (!res.ok || !data.ok) {
         if (res.status === 409) {
           setTime(null);
@@ -283,6 +299,7 @@ export function BookingFlow({
         setSubmitError(data.error ?? "Κάτι πήγε στραβά. Δοκιμάστε ξανά.");
         return;
       }
+      setOtpMode(false);
       setConfirmation({
         code: data.code,
         manageUrl: data.manageUrl,
@@ -297,6 +314,7 @@ export function BookingFlow({
           : date,
         time: time,
         notifications: data.notifications ?? { email: "not_configured", sms: "not_configured" },
+        series: data.series ?? null,
       });
     } catch {
       setSubmitError("Σφάλμα σύνδεσης. Ελέγξτε το δίκτυο και δοκιμάστε ξανά.");
@@ -418,6 +436,12 @@ export function BookingFlow({
             selfCancelHours={selfCancelHours}
             values={{ name, cc, national, email, notes, website }}
             setters={{ setName, setCc, setNational, setEmail, setNotes, setWebsite }}
+            repeat={repeat}
+            setRepeat={setRepeat}
+            otpMode={otpMode}
+            otpCode={otpCode}
+            setOtpCode={setOtpCode}
+            otpMessage={otpMessage}
             submitting={submitting}
             submitError={submitError}
             onBack={back}
@@ -807,12 +831,24 @@ function DetailsStep(props: {
     setNotes: (v: string) => void;
     setWebsite: (v: string) => void;
   };
+  repeat: "none" | "2w" | "3w" | "1m";
+  setRepeat: (v: "none" | "2w" | "3w" | "1m") => void;
+  otpMode: boolean;
+  otpCode: string;
+  setOtpCode: (v: string) => void;
+  otpMessage: string | null;
   submitting: boolean;
   submitError: string | null;
   onBack: () => void;
   onSubmit: () => void;
 }) {
   const { values: v, setters: s } = props;
+  const repeatOptions: { value: "none" | "2w" | "3w" | "1m"; label: string }[] = [
+    { value: "none", label: "Μία φορά" },
+    { value: "2w", label: "Κάθε 2 εβδ." },
+    { value: "3w", label: "Κάθε 3 εβδ." },
+    { value: "1m", label: "Κάθε μήνα" },
+  ];
   const input = "w-full rounded-lg border border-bronze/20 bg-ink-950 px-4 py-3 text-bone outline-none focus:border-bronze";
   return (
     <form
@@ -863,6 +899,50 @@ function DetailsStep(props: {
         </div>
       </div>
 
+      {/* Επανάληψη ραντεβού */}
+      <div className="mt-5">
+        <p className="mb-1.5 text-sm text-bone-muted">Επανάληψη</p>
+        <div className="flex flex-wrap gap-2">
+          {repeatOptions.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => props.setRepeat(o.value)}
+              className={`rounded-full border px-4 py-2 text-sm transition-colors ${
+                props.repeat === o.value ? "border-bronze bg-bronze/10 text-bone" : "border-bronze/25 text-bone-muted hover:text-bone"
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        {props.repeat !== "none" && (
+          <p className="mt-2 text-xs text-bone-dim">
+            Θα κλείσουμε αυτόματα τα επόμενα 4 ραντεβού στο ίδιο μοτίβο (ίδια μέρα/ώρα & κουρέας).
+            Όσα δεν είναι διαθέσιμα θα παραλειφθούν.
+          </p>
+        )}
+      </div>
+
+      {/* Επιβεβαίωση τηλεφώνου με SMS (νέο τηλέφωνο) */}
+      {props.otpMode && (
+        <div className="mt-5 rounded-2xl border border-bronze/30 bg-bronze/5 p-4">
+          <label htmlFor="b-otp" className="mb-1.5 block text-sm font-medium text-bone">
+            Κωδικός επιβεβαίωσης (SMS)
+          </label>
+          {props.otpMessage && <p className="mb-2 text-xs text-bone-muted">{props.otpMessage}</p>}
+          <input
+            id="b-otp"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            placeholder="______"
+            value={props.otpCode}
+            onChange={(e) => props.setOtpCode(e.target.value)}
+            className={`${input} tracking-[0.5em]`}
+          />
+        </div>
+      )}
+
       <p className="mt-4 rounded-lg border border-bronze/15 bg-ink-900 px-4 py-3 text-xs text-bone-muted">
         Ακύρωση έως {props.selfCancelHours} ώρες πριν, μέσω του συνδέσμου διαχείρισης. Με την επιβεβαίωση
         αποδέχεσαι τους{" "}
@@ -883,7 +963,11 @@ function DetailsStep(props: {
           disabled={props.submitting}
           className="rounded-full bg-bronze px-7 py-3 text-base font-semibold text-ink-950 transition-colors hover:bg-bronze-light disabled:opacity-50"
         >
-          {props.submitting ? "Γίνεται κράτηση…" : "Επιβεβαίωση ραντεβού"}
+          {props.submitting
+            ? "Γίνεται κράτηση…"
+            : props.otpMode
+              ? "Επιβεβαίωση & κράτηση"
+              : "Επιβεβαίωση ραντεβού"}
         </button>
       </div>
     </form>
@@ -1011,6 +1095,23 @@ function ConfirmationCard({
         {c.priceLabel && <Row label="Τιμή" value={c.priceLabel} />}
         <Row label="Πληρωμή" value="Στο κατάστημα" />
       </dl>
+
+      {c.series && (c.series.booked.length > 1 || c.series.skipped.length > 0) && (
+        <div className="mx-auto mt-4 max-w-sm rounded-xl border border-bronze/15 bg-ink-900 p-4 text-left text-sm">
+          <p className="font-semibold text-bone">Επαναλαμβανόμενα ραντεβού</p>
+          <p className="mt-1 text-bone-muted">Κλείστηκαν {c.series.booked.length}:</p>
+          <ul className="mt-1 list-disc pl-5 text-bone-muted">
+            {c.series.booked.map((d, i) => (
+              <li key={i}>{d}</li>
+            ))}
+          </ul>
+          {c.series.skipped.length > 0 && (
+            <p className="mt-2 text-xs text-amber-300/90">
+              Δεν ήταν διαθέσιμα (παραλείφθηκαν): {c.series.skipped.join(", ")}. Κλείσε τα χειροκίνητα ή διάλεξε άλλη ώρα.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Ακριβής κατάσταση ειδοποιήσεων */}
       <p className="mx-auto mt-3 max-w-sm text-xs text-bone-dim">

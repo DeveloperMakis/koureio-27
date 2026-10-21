@@ -63,6 +63,11 @@ const serviceSelection = {
   serviceId: z.string().min(1).optional(),
   serviceIds: z.array(z.string().min(1)).min(1).max(5).optional(),
 };
+
+// Επανάληψη ραντεβού: none/κάθε 2 εβδ./3 εβδ./μήνα (~4 εβδ.).
+export const repeatField = z.enum(["none", "2w", "3w", "1m"]).optional();
+export const REPEAT_DAYS: Record<string, number> = { "2w": 14, "3w": 21, "1m": 28 };
+export const REPEAT_COUNT = 4; // συνολικά ραντεβού (1 + 3 επαναλήψεις)
 const requireService = (d: { serviceId?: string; serviceIds?: string[] }) =>
   (d.serviceIds?.length ?? 0) > 0 || !!d.serviceId;
 
@@ -82,6 +87,8 @@ export const createBookingSchema = z
     customerPhone: phone,
     customerEmail: z.union([z.string().trim().email("Μη έγκυρο email"), z.literal("")]).optional(),
     notes: z.string().trim().max(500).optional(),
+    repeat: repeatField,
+    otpCode: z.string().trim().max(10).optional(), // κωδικός SMS επιβεβαίωσης (νέοι πελάτες)
   })
   .refine(requireService, { message: "Επιλέξτε τουλάχιστον μία υπηρεσία", path: ["serviceIds"] });
 
@@ -152,11 +159,16 @@ export const closureCreateSchema = z.object({
 });
 
 export const manualBookingSchema = z.object({
-  serviceId: z.string().min(1),
+  serviceId: z.string().min(1).optional(),
+  serviceIds: z.array(z.string().min(1)).min(1).max(5).optional(),
   barberId: z.string().min(1),
   date: dateStr,
   time: timeStr,
   customerName: z.string().trim().min(1).max(80),
   customerPhone: z.string().trim().max(20).optional(),
   notes: z.string().trim().max(500).optional(),
+  repeat: repeatField,
+}).refine((d) => (d.serviceIds?.length ?? 0) > 0 || !!d.serviceId, {
+  message: "Επιλέξτε υπηρεσία",
+  path: ["serviceIds"],
 });

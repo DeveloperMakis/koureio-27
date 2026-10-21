@@ -22,33 +22,42 @@ function backoffSeconds(attempts: number): number {
   return Math.min(30 * Math.pow(2, Math.max(0, attempts - 1)), 1800);
 }
 
-/** Υπενθυμίσεις για CONFIRMED ραντεβού συνδεδεμένων πελατών εντός του παραθύρου. */
+/**
+ * Υπενθυμίσεις για CONFIRMED ραντεβού συνδεδεμένων πελατών, σε ΠΟΛΛΑΠΛΑ σημεία
+ * πριν την ώρα (π.χ. 60 & 30 λεπτά). Κάθε offset → ξεχωριστή υπενθύμιση (dedupe).
+ */
 export async function scanReminders(): Promise<{ enqueued: number }> {
   const now = new Date();
-  const until = new Date(now.getTime() + bookingConfig.reminderLeadMinutes * 60000);
-
-  const bookings = await prisma.booking.findMany({
-    where: { status: "CONFIRMED", customerId: { not: null }, startAt: { gt: now, lte: until } },
-    select: { id: true, code: true, customerId: true, serviceName: true, startAt: true },
-  });
-
+  const offsets = [...bookingConfig.reminderOffsetsMin].sort((a, b) => b - a); // μεγαλύτερο πρώτα
   let enqueued = 0;
-  for (const b of bookings) {
-    if (!b.customerId) continue;
-    const startISO = b.startAt.toISOString();
-    const dateStr = athensParts(b.startAt).dateStr;
-    const before = await prisma.notificationOutbox.findUnique({ where: { dedupeKey: `reminder:${b.code}:${startISO}` } });
-    if (before) continue;
-    await enqueueNotification(prisma, {
-      customerId: b.customerId,
-      type: "reminder",
-      title: "Υπενθύμιση ραντεβού",
-      body: `${b.serviceName} — ${formatAthensDateLong(dateStr)} στις ${formatAthensTime(b.startAt)}`,
-      dedupeKey: `reminder:${b.code}:${startISO}`,
-      bookingId: b.id,
-      data: { screen: "booking", code: b.code, intendedStartISO: startISO },
+
+  for (const offset of offsets) {
+    const until = new Date(now.getTime() + offset * 60000);
+    const label = offset >= 60 ? (offset === 60 ? "σε 1 ώρα" : `σε ${Math.round(offset / 60)} ώρες`) : `σε ${offset} λεπτά`;
+
+    const bookings = await prisma.booking.findMany({
+      where: { status: "CONFIRMED", customerId: { not: null }, startAt: { gt: now, lte: until } },
+      select: { id: true, code: true, customerId: true, serviceName: true, startAt: true },
     });
-    enqueued++;
+
+    for (const b of bookings) {
+      if (!b.customerId) continue;
+      const startISO = b.startAt.toISOString();
+      const dateStr = athensParts(b.startAt).dateStr;
+      const dedupeKey = `reminder:${b.code}:${offset}:${startISO}`;
+      const before = await prisma.notificationOutbox.findUnique({ where: { dedupeKey } });
+      if (before) continue;
+      await enqueueNotification(prisma, {
+        customerId: b.customerId,
+        type: "reminder",
+        title: `Υπενθύμιση ραντεβού (${label})`,
+        body: `${b.serviceName} — ${formatAthensDateLong(dateStr)} στις ${formatAthensTime(b.startAt)}`,
+        dedupeKey,
+        bookingId: b.id,
+        data: { screen: "booking", code: b.code, intendedStartISO: startISO },
+      });
+      enqueued++;
+    }
   }
   return { enqueued };
 }

@@ -13,7 +13,8 @@ import { generateBookingCode, generateCancelToken } from "@/lib/codes";
 import { athensWallToUtc, weekdayOf, hmToMin, addDays, todayAthens, athensParts, formatAthensDateLong, formatAthensTime } from "@/lib/datetime";
 import { enqueueNotification } from "@/lib/notify-events";
 import { loadServiceBundle } from "@/lib/service-bundle";
-import { normalizeServiceIds, type CreateBookingInput } from "@/lib/validation";
+import { normalizeServiceIds, REPEAT_DAYS, REPEAT_COUNT, type CreateBookingInput } from "@/lib/validation";
+import { randomUUID } from "crypto";
 
 export type BookingErrorCode =
   | "SERVICE_NOT_FOUND"
@@ -57,6 +58,8 @@ export async function createBooking(
   source: "online" | "admin" = "online",
   idempotencyKey?: string,
   customerId?: string,
+  seriesId?: string,
+  skipAdvanceLimit = false,
 ): Promise<BookingResult> {
   // Μία ή περισσότερες υπηρεσίες (διατηρείται η σειρά, πρώτη = κύρια).
   const serviceIds = normalizeServiceIds(input);
@@ -104,7 +107,7 @@ export async function createBooking(
     if (startUtc.getTime() < now.getTime() + bookingConfig.minLeadMinutes * 60000) {
       return { ok: false, error: "TOO_SOON" };
     }
-    if (input.date > addDays(todayAthens(), bookingConfig.maxAdvanceDays)) {
+    if (!skipAdvanceLimit && input.date > addDays(todayAthens(), bookingConfig.maxAdvanceDays)) {
       return { ok: false, error: "TOO_FAR" };
     }
   }
@@ -177,6 +180,7 @@ export async function createBooking(
             cancelToken,
             idempotencyKey: idempotencyKey ?? null,
             customerId: customerId ?? null,
+            seriesId: seriesId ?? null,
             serviceId: bundle.primaryServiceId,
             barberId: chosen.id,
             startAt: startUtc,
@@ -271,6 +275,52 @@ export async function createBooking(
     }
   }
   return { ok: false, error: "UNKNOWN" };
+}
+
+export interface SeriesOccurrence {
+  date: string;
+  time: string;
+  booked: boolean;
+  code?: string;
+  reason?: BookingErrorCode;
+}
+
+/**
+ * Σειρά επαναλαμβανόμενων ραντεβού (ίδια μέρα/ώρα, ανά 2/3 εβδ. ή ~μήνα).
+ * Η 1η κράτηση πρέπει να πετύχει· οι επόμενες είναι best-effort (όσες δεν χωρούν
+ * παραλείπονται και επιστρέφονται ως «skipped»). Όλες κρατούν τον ίδιο κουρέα.
+ */
+export async function createBookingSeries(
+  input: CreateBookingInput,
+  source: "online" | "admin",
+  repeat: "none" | "2w" | "3w" | "1m",
+  idempotencyKey?: string,
+  customerId?: string,
+): Promise<{ first: BookingResult; seriesId: string | null; occurrences: SeriesOccurrence[] }> {
+  const intervalDays = REPEAT_DAYS[repeat];
+  if (!intervalDays) {
+    const first = await createBooking(input, source, idempotencyKey, customerId);
+    return { first, seriesId: null, occurrences: [] };
+  }
+
+  const seriesId = randomUUID();
+  const first = await createBooking(input, source, idempotencyKey, customerId, seriesId);
+  const occurrences: SeriesOccurrence[] = [];
+  if (!first.ok) return { first, seriesId: null, occurrences };
+  occurrences.push({ date: input.date, time: input.time, booked: true, code: first.booking.code });
+
+  // Ίδιος κουρέας σε όλη τη σειρά (ο κουρέας που επιλέχθηκε στην 1η κράτηση).
+  const seriesBarberId = first.booking.barberId;
+  for (let k = 1; k < REPEAT_COUNT; k++) {
+    const date = addDays(input.date, k * intervalDays);
+    const occInput: CreateBookingInput = { ...input, date, barberId: seriesBarberId, repeat: "none" };
+    const idem = idempotencyKey ? `${idempotencyKey}:${k}` : undefined;
+    // Οι επαναλήψεις της σειράς μπορούν να ξεπερνούν το όριο προκράτησης.
+    const r = await createBooking(occInput, source, idem, customerId, seriesId, true);
+    if (r.ok) occurrences.push({ date, time: input.time, booked: true, code: r.booking.code });
+    else occurrences.push({ date, time: input.time, booked: false, reason: r.error });
+  }
+  return { first, seriesId, occurrences };
 }
 
 /** Αλλαγή ώρας/κουρέα ως ενιαία συναλλαγή — αν αποτύχει, μένει η παλιά. */

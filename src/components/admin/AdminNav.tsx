@@ -11,6 +11,7 @@ const links = [
   { href: "/admin/promotions", label: "Προσφορές" },
   { href: "/admin/instagram", label: "Instagram" },
   { href: "/admin/waitlist", label: "Αναμονή" },
+  { href: "/admin/settings", label: "Ρυθμίσεις" },
 ];
 
 export function AdminNav({ email }: { email?: string }) {

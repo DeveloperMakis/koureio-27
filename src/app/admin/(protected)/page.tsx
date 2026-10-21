@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { setBookingStatusAction } from "@/app/admin/actions";
 import { ManualBookingForm } from "@/components/admin/ManualBookingForm";
+import { CustomerSearch } from "@/components/admin/CustomerSearch";
 import {
   todayAthens,
   addDays,
@@ -25,12 +26,26 @@ export default async function AdminDashboard({
 }: {
   searchParams: { date?: string; view?: string };
 }) {
-  const view = searchParams.view === "week" ? "week" : "day";
+  const view =
+    searchParams.view === "week" ? "week" : searchParams.view === "month" ? "month" : "day";
   const date = /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date ?? "") ? searchParams.date! : todayAthens();
 
-  const endDate = view === "week" ? addDays(date, 6) : date;
-  const rangeStart = athensWallToUtc(date, "00:00");
-  const rangeEnd = athensWallToUtc(addDays(endDate, 1), "00:00");
+  // Εύρος προβολής (ημέρα / εβδομάδα / μήνας).
+  let rangeFrom = date;
+  let rangeTo = date;
+  if (view === "week") {
+    rangeTo = addDays(date, 6);
+  } else if (view === "month") {
+    const [yy, mm] = date.split("-").map(Number);
+    rangeFrom = `${yy}-${String(mm).padStart(2, "0")}-01`;
+    const daysInMonth = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+    rangeTo = `${yy}-${String(mm).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+  }
+  const rangeStart = athensWallToUtc(rangeFrom, "00:00");
+  const rangeEnd = athensWallToUtc(addDays(rangeTo, 1), "00:00");
+  const monthLabel = new Intl.DateTimeFormat("el-GR", { month: "long", year: "numeric", timeZone: "Europe/Athens" }).format(
+    athensWallToUtc(rangeFrom, "12:00"),
+  );
 
   const [bookings, services, barbers] = await Promise.all([
     prisma.booking.findMany({
@@ -50,8 +65,8 @@ export default async function AdminDashboard({
     groups.get(key)!.push(b);
   }
 
-  const prev = addDays(date, view === "week" ? -7 : -1);
-  const next = addDays(date, view === "week" ? 7 : 1);
+  const prev = view === "month" ? addDays(rangeFrom, -1) : addDays(date, view === "week" ? -7 : -1);
+  const next = view === "month" ? addDays(rangeTo, 1) : addDays(date, view === "week" ? 7 : 1);
   const confirmedCount = bookings.filter((b) => b.status === "CONFIRMED").length;
 
   return (
@@ -61,8 +76,10 @@ export default async function AdminDashboard({
           <h1 className="font-display text-2xl font-semibold text-bone">Ημερολόγιο</h1>
           <p className="mt-1 text-sm text-bone-muted">
             {view === "week"
-              ? `${formatAthensDateLong(date)} — ${formatAthensDateLong(endDate)}`
-              : formatAthensDateLong(date)}{" "}
+              ? `${formatAthensDateLong(rangeFrom)} — ${formatAthensDateLong(rangeTo)}`
+              : view === "month"
+                ? monthLabel
+                : formatAthensDateLong(date)}{" "}
             · {confirmedCount} ενεργά
           </p>
         </div>
@@ -76,10 +93,14 @@ export default async function AdminDashboard({
       <div className="mt-4 flex items-center gap-2">
         <ViewToggle active={view === "day"} href={`/admin?view=day&date=${date}`} label="Ημέρα" />
         <ViewToggle active={view === "week"} href={`/admin?view=week&date=${date}`} label="Εβδομάδα" />
+        <ViewToggle active={view === "month"} href={`/admin?view=month&date=${date}`} label="Μήνας" />
       </div>
 
-      <div className="mt-6">
-        <ManualBookingForm services={services} barbers={barbers} defaultDate={date} />
+      <div className="mt-6 space-y-3">
+        <div className="flex flex-wrap gap-3">
+          <ManualBookingForm services={services} barbers={barbers} defaultDate={date} />
+          <CustomerSearch />
+        </div>
       </div>
 
       <div className="mt-8 space-y-8">
@@ -91,7 +112,7 @@ export default async function AdminDashboard({
 
         {Array.from(groups.entries()).map(([day, items]) => (
           <section key={day}>
-            {view === "week" && (
+            {view !== "day" && (
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-widest text-bronze">
                 {formatAthensDateLong(day)}
               </h2>

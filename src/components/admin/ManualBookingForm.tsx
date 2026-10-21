@@ -31,8 +31,32 @@ export function ManualBookingForm({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
+  const [repeat, setRepeat] = useState<"none" | "2w" | "3w" | "1m">("none");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [findingNext, setFindingNext] = useState(false);
+
+  async function findNext() {
+    if (!serviceId) return;
+    setFindingNext(true);
+    setMsg(null);
+    try {
+      const qs = new URLSearchParams({ serviceId });
+      if (barberId) qs.set("barberId", barberId);
+      const r = await fetch(`/api/availability/first?${qs.toString()}`);
+      const d = await r.json();
+      if (d.first) {
+        setDate(d.first.dateStr);
+        setTime(d.first.time);
+      } else {
+        setMsg({ ok: false, text: "Δεν βρέθηκε διαθέσιμη ώρα." });
+      }
+    } catch {
+      setMsg({ ok: false, text: "Σφάλμα αναζήτησης διαθεσιμότητας." });
+    } finally {
+      setFindingNext(false);
+    }
+  }
 
   // Αναζήτηση υπάρχοντος πελάτη καθώς γράφει ο ιδιοκτήτης (admin only).
   const [matches, setMatches] = useState<CustomerMatch[]>([]);
@@ -82,14 +106,19 @@ export function ManualBookingForm({
       const res = await fetch("/api/admin/bookings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ serviceId, barberId, date, time, customerName: name, customerPhone: phone, notes }),
+        body: JSON.stringify({ serviceId, barberId, date, time, customerName: name, customerPhone: phone, notes, repeat }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
         setMsg({ ok: false, text: data.error ?? "Αποτυχία." });
         return;
       }
-      setMsg({ ok: true, text: `Καταχωρήθηκε (${data.code}).` });
+      let text = `Καταχωρήθηκε (${data.code}).`;
+      if (data.series) {
+        text = `Κλείστηκαν ${data.series.booked} ραντεβού (${data.code}).`;
+        if (data.series.skipped?.length) text += ` Παραλείφθηκαν: ${data.series.skipped.join(", ")}.`;
+      }
+      setMsg({ ok: true, text });
       setName("");
       setPhone("");
       setTime("");
@@ -118,7 +147,7 @@ export function ManualBookingForm({
     "w-full rounded-lg border border-bronze/20 bg-ink-950 px-3 py-2.5 text-sm text-bone outline-none focus:border-bronze";
 
   return (
-    <form onSubmit={submit} className="rounded-2xl border border-bronze/15 bg-ink-900 p-5">
+    <form onSubmit={submit} className="w-full rounded-2xl border border-bronze/15 bg-ink-900 p-5">
       <div className="mb-4 flex items-center justify-between">
         <h3 className="font-semibold text-bone">Νέο ραντεβού</h3>
         <button type="button" onClick={() => setOpen(false)} className="text-sm text-bone-dim hover:text-bone">
@@ -153,6 +182,25 @@ export function ManualBookingForm({
         <label className="text-sm">
           <span className="mb-1 block text-bone-muted">Ώρα</span>
           <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputCls} required />
+        </label>
+        <div className="flex items-end sm:col-span-2">
+          <button
+            type="button"
+            onClick={findNext}
+            disabled={findingNext || !serviceId}
+            className="rounded-full border border-bronze/40 px-4 py-2 text-sm font-semibold text-bronze-light hover:bg-bronze hover:text-ink-950 disabled:opacity-50"
+          >
+            {findingNext ? "Αναζήτηση…" : "⚡ Επόμενο διαθέσιμο"}
+          </button>
+        </div>
+        <label className="text-sm sm:col-span-2">
+          <span className="mb-1 block text-bone-muted">Επανάληψη</span>
+          <select value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)} className={inputCls}>
+            <option value="none">Μία φορά</option>
+            <option value="2w">Κάθε 2 εβδομάδες (×4)</option>
+            <option value="3w">Κάθε 3 εβδομάδες (×4)</option>
+            <option value="1m">Κάθε μήνα (×4)</option>
+          </select>
         </label>
         <label className="relative text-sm">
           <span className="mb-1 block text-bone-muted">Όνομα πελάτη</span>

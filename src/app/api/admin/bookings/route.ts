@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentAdminId } from "@/lib/auth";
-import { createBooking } from "@/lib/booking-service";
+import { createBookingSeries } from "@/lib/booking-service";
 import { manualBookingSchema } from "@/lib/validation";
+import { formatAthensDateLong } from "@/lib/datetime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,9 +26,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const result = await createBooking(
+  const repeat = (parsed.data.repeat ?? "none") as "none" | "2w" | "3w" | "1m";
+  const series = await createBookingSeries(
     {
       serviceId: parsed.data.serviceId,
+      serviceIds: parsed.data.serviceIds,
       barberId: parsed.data.barberId,
       date: parsed.data.date,
       time: parsed.data.time,
@@ -36,7 +39,9 @@ export async function POST(req: NextRequest) {
       notes: parsed.data.notes,
     },
     "admin",
+    repeat,
   );
+  const result = series.first;
 
   if (!result.ok) {
     const msg =
@@ -48,5 +53,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: msg }, { status: 409 });
   }
 
-  return NextResponse.json({ ok: true, code: result.booking.code });
+  const booked = series.occurrences.filter((o) => o.booked).length;
+  const skipped = series.occurrences.filter((o) => !o.booked).map((o) => formatAthensDateLong(o.date));
+  return NextResponse.json({
+    ok: true,
+    code: result.booking.code,
+    series: repeat !== "none" ? { booked, skipped } : null,
+  });
 }

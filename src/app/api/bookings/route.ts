@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createBooking } from "@/lib/booking-service";
+import { createBookingSeries } from "@/lib/booking-service";
 import { createBookingSchema } from "@/lib/validation";
 import { rateLimit } from "@/lib/ratelimit";
 import { notificationStatus } from "@/lib/notifications";
+import { otpRequired, hasRecentVerification, sendOtp, verifyOtp } from "@/lib/otp";
+import { formatAthensDateLong } from "@/lib/datetime";
 import type { BookingErrorCode } from "@/lib/booking-service";
 
 export const runtime = "nodejs";
@@ -65,7 +67,36 @@ export async function POST(req: NextRequest) {
     (typeof body === "object" && body && (body as Record<string, unknown>).idempotencyKey) ||
     undefined;
 
-  const result = await createBooking(parsed.data, "online", idemKey ? String(idemKey) : undefined);
+  // --- Ήπιος έλεγχος OTP για νέα τηλέφωνα (αν ενεργό & υπάρχει πάροχος SMS) ---
+  const phone = parsed.data.customerPhone;
+  if (await otpRequired(phone)) {
+    const code = parsed.data.otpCode?.trim();
+    if (code) {
+      const okCode = await verifyOtp(phone, code);
+      if (!okCode) {
+        return NextResponse.json(
+          { ok: false, needsOtp: true, error: "Λάθος ή ληγμένος κωδικός. Δοκιμάστε ξανά." },
+          { status: 400 },
+        );
+      }
+      // Επιβεβαιωμένο → συνεχίζουμε στην κράτηση.
+    } else if (!(await hasRecentVerification(phone))) {
+      const sent = await sendOtp(phone);
+      if (sent.ok) {
+        return NextResponse.json({
+          ok: false,
+          needsOtp: true,
+          message: "Σου στείλαμε 6ψήφιο κωδικό με SMS. Γράψε τον για να ολοκληρωθεί η κράτηση.",
+        });
+      }
+      // Ήπιο: αν το SMS δεν στάλθηκε (τεχνικό πρόβλημα/πάροχος), ΔΕΝ μπλοκάρουμε.
+    }
+  }
+
+  // --- Κράτηση (με επανάληψη αν ζητήθηκε) ---
+  const repeat = (parsed.data.repeat ?? "none") as "none" | "2w" | "3w" | "1m";
+  const series = await createBookingSeries(parsed.data, "online", repeat, idemKey ? String(idemKey) : undefined);
+  const result = series.first;
   if (!result.ok) {
     const status = result.error === "SLOT_TAKEN" ? 409 : 400;
     return NextResponse.json(
@@ -76,6 +107,15 @@ export async function POST(req: NextRequest) {
 
   const b = result.booking;
   const base = process.env.NEXT_PUBLIC_SITE_URL || new URL(req.url).origin;
+  // Σύνοψη σειράς (αν επανάληψη): booked/skipped ημερομηνίες για εμφάνιση.
+  const seriesInfo =
+    repeat !== "none"
+      ? {
+          booked: series.occurrences.filter((o) => o.booked).map((o) => formatAthensDateLong(o.date)),
+          skipped: series.occurrences.filter((o) => !o.booked).map((o) => formatAthensDateLong(o.date)),
+        }
+      : null;
+
   return NextResponse.json({
     ok: true,
     reused: result.reused ?? false,
@@ -88,6 +128,7 @@ export async function POST(req: NextRequest) {
     durationMin: b.durationMin,
     priceCents: b.priceCents,
     barberName: b.barberName,
+    series: seriesInfo,
     // Ακριβής κατάσταση ειδοποιήσεων (ΔΕΝ ψευδώς «στάλθηκε»).
     notifications: notificationStatus(),
   });
