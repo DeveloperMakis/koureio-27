@@ -12,7 +12,8 @@ import { bookingConfig } from "@/config/booking";
 import { generateBookingCode, generateCancelToken } from "@/lib/codes";
 import { athensWallToUtc, weekdayOf, hmToMin, addDays, todayAthens, athensParts, formatAthensDateLong, formatAthensTime } from "@/lib/datetime";
 import { enqueueNotification } from "@/lib/notify-events";
-import type { CreateBookingInput } from "@/lib/validation";
+import { loadServiceBundle } from "@/lib/service-bundle";
+import { normalizeServiceIds, type CreateBookingInput } from "@/lib/validation";
 
 export type BookingErrorCode =
   | "SERVICE_NOT_FOUND"
@@ -57,6 +58,10 @@ export async function createBooking(
   idempotencyKey?: string,
   customerId?: string,
 ): Promise<BookingResult> {
+  // Μία ή περισσότερες υπηρεσίες (διατηρείται η σειρά, πρώτη = κύρια).
+  const serviceIds = normalizeServiceIds(input);
+  const primaryServiceId = serviceIds[0];
+
   // Idempotency: αν υπάρχει ήδη κράτηση με το ίδιο κλειδί, επέστρεψέ την.
   if (idempotencyKey) {
     const existing = await prisma.booking.findUnique({
@@ -66,7 +71,7 @@ export async function createBooking(
     if (existing) {
       // Το ίδιο key με ΔΙΑΦΟΡΕΤΙΚΟ payload (άλλη υπηρεσία/ώρα) → σύγκρουση, όχι σιωπηλή επιστροφή.
       const reqStart = athensWallToUtc(input.date, input.time);
-      if (existing.serviceId !== input.serviceId || existing.startAt.getTime() !== reqStart.getTime()) {
+      if (existing.serviceId !== primaryServiceId || existing.startAt.getTime() !== reqStart.getTime()) {
         return { ok: false, error: "IDEMPOTENCY_CONFLICT" };
       }
       return {
@@ -87,11 +92,11 @@ export async function createBooking(
     }
   }
 
-  const service = await prisma.service.findFirst({ where: { id: input.serviceId, active: true } });
-  if (!service) return { ok: false, error: "SERVICE_NOT_FOUND" };
+  const bundle = await loadServiceBundle(serviceIds);
+  if (!bundle) return { ok: false, error: "SERVICE_NOT_FOUND" };
 
   const startUtc = athensWallToUtc(input.date, input.time);
-  const endUtc = plusMin(startUtc, service.durationMin);
+  const endUtc = plusMin(startUtc, bundle.totalDuration);
   const buffer = bookingConfig.bufferMin;
   const now = new Date();
 
@@ -105,7 +110,7 @@ export async function createBooking(
   }
 
   const startMin = hmToMin(input.time);
-  const endMin = startMin + service.durationMin;
+  const endMin = startMin + bundle.totalDuration;
   const weekday = weekdayOf(input.date);
   const dayStart = athensWallToUtc(input.date, "00:00");
   const dayEnd = plusMin(dayStart, 36 * 60);
@@ -172,13 +177,13 @@ export async function createBooking(
             cancelToken,
             idempotencyKey: idempotencyKey ?? null,
             customerId: customerId ?? null,
-            serviceId: service.id,
+            serviceId: bundle.primaryServiceId,
             barberId: chosen.id,
             startAt: startUtc,
             endAt: endUtc,
-            serviceName: service.name,
-            priceCents: service.priceCents,
-            durationMin: service.durationMin,
+            serviceName: bundle.combinedName,
+            priceCents: bundle.totalPrice,
+            durationMin: bundle.totalDuration,
             customerName: input.customerName,
             customerPhone: input.customerPhone ?? "",
             customerEmail: input.customerEmail || null,
@@ -186,6 +191,16 @@ export async function createBooking(
             status: "CONFIRMED",
             source,
             slotKey,
+            // Γραμμές υπηρεσιών (στιγμιότυπο ανά υπηρεσία).
+            items: {
+              create: bundle.items.map((it, idx) => ({
+                serviceId: it.serviceId,
+                name: it.name,
+                durationMin: it.durationMin,
+                priceCents: it.priceCents,
+                order: idx,
+              })),
+            },
           },
         });
 
@@ -197,7 +212,7 @@ export async function createBooking(
             customerId,
             type: "confirmation",
             title: "Το ραντεβού σου επιβεβαιώθηκε",
-            body: `${service.name} — ${formatAthensDateLong(dateStr)} στις ${formatAthensTime(startUtc)}`,
+            body: `${bundle.combinedName} — ${formatAthensDateLong(dateStr)} στις ${formatAthensTime(startUtc)}`,
             dedupeKey: `conf:${booking.code}`,
             bookingId: booking.id,
             data: { screen: "booking", code: booking.code },

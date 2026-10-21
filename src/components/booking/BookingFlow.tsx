@@ -68,6 +68,18 @@ function uid() {
     return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 }
+/** Μορφοποίηση τιμής (client) — ίδια λογική με το money.ts. */
+function fmtPrice(cents: number | null): string | null {
+  if (cents == null) return null;
+  return new Intl.NumberFormat("el-GR", { style: "currency", currency: "EUR" }).format(cents / 100);
+}
+/** Μορφοποίηση διάρκειας (client) — ίδια λογική με το money.ts. */
+function fmtDuration(min: number): string {
+  if (min < 60) return `${min}′`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}ω` : `${h}ω ${m}′`;
+}
 
 /* ============================ Component ============================ */
 export function BookingFlow({
@@ -95,8 +107,12 @@ export function BookingFlow({
   const [stepIdx, setStepIdx] = useState(0);
   const step = steps[stepIdx];
 
-  const [serviceId, setServiceId] = useState<string | null>(
-    () => services.find((s) => s.slug === initialServiceSlug)?.id ?? null,
+  // Πολλαπλές υπηρεσίες ανά ραντεβού (σε σειρά επιλογής).
+  const [serviceIds, setServiceIds] = useState<string[]>(
+    () => {
+      const s = services.find((x) => x.slug === initialServiceSlug);
+      return s ? [s.id] : [];
+    },
   );
   const [barberId, setBarberId] = useState<string | null>(null); // null = χωρίς προτίμηση
   const [chosenBarberName, setChosenBarberName] = useState<string | null>(
@@ -122,20 +138,33 @@ export function BookingFlow({
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const idemRef = useRef<string>(uid());
 
-  const selectedService = useMemo(() => services.find((s) => s.id === serviceId) ?? null, [services, serviceId]);
+  // Επιλεγμένες υπηρεσίες (σε σειρά) + αθροίσματα.
+  const selectedServices = useMemo(
+    () => serviceIds.map((id) => services.find((s) => s.id === id)).filter(Boolean) as Service[],
+    [services, serviceIds],
+  );
+  const hasService = selectedServices.length > 0;
+  const totalDuration = selectedServices.reduce((n, s) => n + s.durationMin, 0);
+  const anyPrice = selectedServices.some((s) => s.priceCents != null);
+  const totalPriceCents = anyPrice ? selectedServices.reduce((n, s) => n + (s.priceCents ?? 0), 0) : null;
+  const totalPriceLabel = fmtPrice(totalPriceCents);
+  const totalDurationLabel = totalDuration > 0 ? fmtDuration(totalDuration) : null;
+  const combinedName = selectedServices.map((s) => s.name).join(" + ");
+  const serviceIdsKey = serviceIds.join(",");
+
   const selectedDateOption = useMemo(() => dates.find((d) => d.value === date) ?? null, [dates, date]);
 
   // Νέο idempotency key όταν αλλάζει η επιλογή (ώστε αλλαγή να μην μπλοκάρεται).
   useEffect(() => {
     idemRef.current = uid();
-  }, [serviceId, barberId, date, time]);
+  }, [serviceIdsKey, barberId, date, time]);
 
   const fetchAvailability = useCallback(
     async (d: string, keepTime = false) => {
-      if (!serviceId) return;
+      if (serviceIds.length === 0) return;
       setSlotsState("loading");
       setShowWaitlist(false);
-      const qs = new URLSearchParams({ serviceId, date: d });
+      const qs = new URLSearchParams({ serviceIds: serviceIds.join(","), date: d });
       if (barberId) qs.set("barberId", barberId);
       try {
         const r = await fetch(`/api/availability?${qs.toString()}`);
@@ -149,13 +178,13 @@ export function BookingFlow({
         setSlotsState("error");
       }
     },
-    [serviceId, barberId, time],
+    [serviceIdsKey, barberId, time],
   );
 
   useEffect(() => {
-    if (step === "when" && serviceId && date) fetchAvailability(date, true);
+    if (step === "when" && hasService && date) fetchAvailability(date, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, serviceId, barberId, date]);
+  }, [step, serviceIdsKey, barberId, date]);
 
   function goTo(key: StepKey) {
     setSubmitError(null);
@@ -171,10 +200,9 @@ export function BookingFlow({
     setStepIdx((i) => Math.max(i - 1, 0));
   }
 
-  function selectService(id: string) {
-    setServiceId(id);
+  function toggleService(id: string) {
+    setServiceIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
     setTime(null);
-    next();
   }
   function selectBarber(id: string | null, nameLabel: string | null) {
     setBarberId(id);
@@ -184,10 +212,10 @@ export function BookingFlow({
   }
 
   async function firstAvailable() {
-    if (!serviceId) return;
+    if (!hasService) return;
     setFindingFirst(true);
     try {
-      const qs = new URLSearchParams({ serviceId });
+      const qs = new URLSearchParams({ serviceIds: serviceIds.join(",") });
       if (barberId) qs.set("barberId", barberId);
       const r = await fetch(`/api/availability/first?${qs.toString()}`);
       const data = await r.json();
@@ -206,11 +234,11 @@ export function BookingFlow({
   }
 
   async function nextAvailableDay() {
-    if (!serviceId || !date) return;
+    if (!hasService || !date) return;
     setFindingFirst(true);
     try {
       const from = addDaysStr(date, 1);
-      const qs = new URLSearchParams({ serviceId, fromDate: from });
+      const qs = new URLSearchParams({ serviceIds: serviceIds.join(","), fromDate: from });
       if (barberId) qs.set("barberId", barberId);
       const r = await fetch(`/api/availability/first?${qs.toString()}`);
       const data = await r.json();
@@ -225,7 +253,7 @@ export function BookingFlow({
   }
 
   async function submit() {
-    if (!selectedService || !date || !time) return;
+    if (!hasService || !date || !time) return;
     setSubmitting(true);
     setSubmitError(null);
     const phoneValue = `${cc} ${national}`.trim();
@@ -234,7 +262,7 @@ export function BookingFlow({
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": idemRef.current },
         body: JSON.stringify({
-          serviceId: selectedService.id,
+          serviceIds,
           barberId: barberId ?? undefined,
           date,
           time,
@@ -262,8 +290,8 @@ export function BookingFlow({
         startAtISO: data.startAtISO,
         serviceName: data.serviceName,
         barberName: data.barberName,
-        priceLabel: selectedService.priceLabel,
-        durationLabel: selectedService.durationLabel,
+        priceLabel: totalPriceLabel,
+        durationLabel: totalDurationLabel ?? fmtDuration(totalDuration),
         dateLabel: selectedDateOption
           ? `${selectedDateOption.weekdayShort} ${selectedDateOption.dayNum} ${selectedDateOption.monthShort}`
           : date,
@@ -296,15 +324,37 @@ export function BookingFlow({
     );
   }
 
+  // Μπορεί να προχωρήσει στο τρέχον βήμα;
+  const canContinue =
+    (step === "service" && hasService) ||
+    step === "barber" ||
+    (step === "when" && !!time) ||
+    step === "details";
+
+  // Πρωτεύουσα ενέργεια ανά βήμα (ίδια σε δεξιά σύνοψη & mobile μπάρα).
+  function primaryAction() {
+    if (step === "service") {
+      if (hasService) next();
+    } else if (step === "when") next();
+    else if (step === "details") submit();
+  }
+
   /* ----- Σύνοψη (σταθερή δεξιά σε desktop, inline σε mobile) ----- */
   const summary = (
     <Summary
-      service={selectedService}
+      serviceName={combinedName || null}
+      serviceCount={selectedServices.length}
+      durationLabel={totalDurationLabel}
+      priceLabel={totalPriceLabel}
       barberLabel={step === "service" ? null : barberLabel}
       dateLabel={selectedDateOption ? `${selectedDateOption.weekdayShort} ${selectedDateOption.dayNum} ${selectedDateOption.monthShort}` : null}
       time={time}
       multiBarber={multiBarber}
       onChange={(k) => goTo(k)}
+      step={step}
+      canContinue={canContinue}
+      submitting={submitting}
+      onPrimary={primaryAction}
     />
   );
 
@@ -315,7 +365,12 @@ export function BookingFlow({
         <Stepper steps={steps} current={stepIdx} />
 
         {step === "service" && (
-          <ServiceStep services={services} selectedId={serviceId} onSelect={selectService} />
+          <ServiceStep
+            services={services}
+            selectedIds={serviceIds}
+            onToggle={toggleService}
+            onContinue={() => hasService && next()}
+          />
         )}
 
         {step === "barber" && (
@@ -327,7 +382,7 @@ export function BookingFlow({
           />
         )}
 
-        {step === "when" && selectedService && (
+        {step === "when" && hasService && (
           <WhenStep
             dates={dates}
             date={date}
@@ -336,7 +391,7 @@ export function BookingFlow({
             slotsState={slotsState}
             findingFirst={findingFirst}
             showWaitlist={showWaitlist}
-            serviceId={selectedService.id}
+            serviceIds={serviceIds}
             barberId={barberId}
             onPickDate={(d) => {
               setDate(d);
@@ -351,9 +406,11 @@ export function BookingFlow({
           />
         )}
 
-        {step === "details" && selectedService && (
+        {step === "details" && hasService && (
           <DetailsStep
-            service={selectedService}
+            serviceName={combinedName}
+            durationLabel={totalDurationLabel ?? fmtDuration(totalDuration)}
+            priceLabel={totalPriceLabel}
             barberLabel={barberLabel}
             multiBarber={multiBarber}
             dateLabel={selectedDateOption ? `${selectedDateOption.weekdayShort} ${selectedDateOption.dayNum} ${selectedDateOption.monthShort}` : date ?? ""}
@@ -376,20 +433,12 @@ export function BookingFlow({
 
       {/* Σταθερή κάτω μπάρα (mobile) */}
       <MobileBar
-        priceLabel={selectedService?.priceLabel ?? null}
-        durationLabel={selectedService?.durationLabel ?? null}
+        priceLabel={totalPriceLabel}
+        durationLabel={totalDurationLabel}
         step={step}
-        canContinue={
-          (step === "service" && !!serviceId) ||
-          (step === "when" && !!time) ||
-          step === "barber" ||
-          step === "details"
-        }
+        canContinue={canContinue}
         submitting={submitting}
-        onPrimary={() => {
-          if (step === "when") next();
-          else if (step === "details") submit();
-        }}
+        onPrimary={primaryAction}
       />
     </div>
   );
@@ -432,45 +481,74 @@ function Stepper({ steps, current }: { steps: StepKey[]; current: number }) {
 
 function ServiceStep({
   services,
-  selectedId,
-  onSelect,
+  selectedIds,
+  onToggle,
+  onContinue,
 }: {
   services: Service[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  onContinue: () => void;
 }) {
   return (
     <fieldset>
       <legend className="text-xl font-semibold text-bone">Τι θα κάνουμε σήμερα;</legend>
+      <p className="mt-1 text-sm text-bone-muted">Μπορείς να διαλέξεις περισσότερες από μία (π.χ. κούρεμα + ξύρισμα).</p>
       <div className="mt-4 grid gap-3">
-        {services.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            onClick={() => onSelect(s.id)}
-            className={`flex items-center justify-between gap-4 rounded-2xl border p-5 text-left transition-colors ${
-              selectedId === s.id ? "border-bronze bg-bronze/10" : "border-bronze/15 bg-ink-900 hover:border-bronze/40"
-            }`}
-          >
-            <span>
-              <span className="flex items-center gap-2">
-                <span className="font-semibold text-bone">{s.name}</span>
-                {s.recommended && (
-                  <span className="rounded-full bg-bronze/15 px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-bronze-light">
-                    Προτεινόμενη
+        {services.map((s) => {
+          const checked = selectedIds.includes(s.id);
+          return (
+            <button
+              key={s.id}
+              type="button"
+              aria-pressed={checked}
+              onClick={() => onToggle(s.id)}
+              className={`flex items-center justify-between gap-4 rounded-2xl border p-5 text-left transition-colors ${
+                checked ? "border-bronze bg-bronze/10" : "border-bronze/15 bg-ink-900 hover:border-bronze/40"
+              }`}
+            >
+              <span className="flex items-start gap-3">
+                {/* Ένδειξη επιλογής (checkbox) */}
+                <span
+                  className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border text-[0.7rem] ${
+                    checked ? "border-bronze bg-bronze text-ink-950" : "border-bronze/40 text-transparent"
+                  }`}
+                  aria-hidden
+                >
+                  ✓
+                </span>
+                <span>
+                  <span className="flex items-center gap-2">
+                    <span className="font-semibold text-bone">{s.name}</span>
+                    {s.recommended && (
+                      <span className="rounded-full bg-bronze/15 px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-bronze-light">
+                        Προτεινόμενη
+                      </span>
+                    )}
                   </span>
-                )}
+                  <span className="mt-1 block text-sm text-bone-muted">{s.description}</span>
+                  <span className="mt-2 block text-xs uppercase tracking-widest text-bone-dim">{s.durationLabel}</span>
+                </span>
               </span>
-              <span className="mt-1 block text-sm text-bone-muted">{s.description}</span>
-              <span className="mt-2 block text-xs uppercase tracking-widest text-bone-dim">{s.durationLabel}</span>
-            </span>
-            {s.priceLabel && (
-              <span className="shrink-0 rounded-full bg-bronze/10 px-3 py-1 text-sm font-semibold text-bronze-light">
-                {s.priceLabel}
-              </span>
-            )}
-          </button>
-        ))}
+              {s.priceLabel && (
+                <span className="shrink-0 rounded-full bg-bronze/10 px-3 py-1 text-sm font-semibold text-bronze-light">
+                  {s.priceLabel}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {/* Κουμπί συνέχειας (ορατό και εδώ· η δεξιά σύνοψη/κάτω μπάρα έχουν επίσης). */}
+      <div className="mt-6 hidden justify-end md:flex">
+        <button
+          type="button"
+          disabled={selectedIds.length === 0}
+          onClick={onContinue}
+          className="rounded-full bg-bronze px-7 py-3 text-base font-semibold text-ink-950 transition-colors hover:bg-bronze-light disabled:opacity-40"
+        >
+          Συνέχεια
+        </button>
       </div>
     </fieldset>
   );
@@ -536,7 +614,7 @@ function WhenStep(props: {
   slotsState: "idle" | "loading" | "ready" | "error";
   findingFirst: boolean;
   showWaitlist: boolean;
-  serviceId: string;
+  serviceIds: string[];
   barberId: string | null;
   onPickDate: (d: string) => void;
   onPickTime: (t: string) => void;
@@ -639,7 +717,7 @@ function WhenStep(props: {
           </div>
         )}
         {date && slotsState === "ready" && props.showWaitlist && slots.length === 0 && (
-          <WaitlistInline serviceId={props.serviceId} barberId={props.barberId} date={date} />
+          <WaitlistInline serviceId={props.serviceIds[0]} barberId={props.barberId} date={date} />
         )}
         {date && slotsState === "ready" && slots.length > 0 && (
           <div className="space-y-4">
@@ -694,7 +772,9 @@ function WaitlistInline({ serviceId, barberId, date }: { serviceId: string; barb
 }
 
 function DetailsStep(props: {
-  service: Service;
+  serviceName: string;
+  durationLabel: string;
+  priceLabel: string | null;
   barberLabel: string | null;
   multiBarber: boolean;
   dateLabel: string;
@@ -726,11 +806,11 @@ function DetailsStep(props: {
       <h2 className="text-xl font-semibold text-bone">Τα στοιχεία σου και είσαι έτοιμος</h2>
 
       <dl className="mt-4 space-y-1 rounded-2xl border border-bronze/15 bg-ink-900 p-5 text-sm">
-        <Row label="Υπηρεσία" value={props.service.name} />
+        <Row label="Υπηρεσία" value={props.serviceName} />
         {props.multiBarber && <Row label="Κουρέας" value={props.barberLabel ?? "Χωρίς προτίμηση"} />}
         <Row label="Ημέρα & ώρα" value={`${props.dateLabel} · ${props.time}`} />
-        <Row label="Διάρκεια" value={props.service.durationLabel} />
-        {props.service.priceLabel && <Row label="Τιμή" value={props.service.priceLabel} />}
+        <Row label="Διάρκεια" value={props.durationLabel} />
+        {props.priceLabel && <Row label="Τιμή" value={props.priceLabel} />}
         <Row label="Πληρωμή" value="Στο κατάστημα" />
       </dl>
 
@@ -793,34 +873,62 @@ function DetailsStep(props: {
 }
 
 function Summary({
-  service,
+  serviceName,
+  serviceCount,
+  durationLabel,
+  priceLabel,
   barberLabel,
   dateLabel,
   time,
   multiBarber,
   onChange,
+  step,
+  canContinue,
+  submitting,
+  onPrimary,
 }: {
-  service: Service | null;
+  serviceName: string | null;
+  serviceCount: number;
+  durationLabel: string | null;
+  priceLabel: string | null;
   barberLabel: string | null;
   dateLabel: string | null;
   time: string | null;
   multiBarber: boolean;
   onChange: (k: StepKey) => void;
+  step: StepKey;
+  canContinue: boolean;
+  submitting: boolean;
+  onPrimary: () => void;
 }) {
+  // Το δεξί panel έχει πάντα ορατή πρωτεύουσα ενέργεια (εκτός «κουρέα» που προχωρά αυτόματα).
+  const showCta = step === "service" || step === "when" || step === "details";
+  const ctaLabel = step === "details" ? (submitting ? "Γίνεται κράτηση…" : "Επιβεβαίωση ραντεβού") : "Συνέχεια";
+  const serviceLabel = serviceCount > 1 ? `Υπηρεσίες (${serviceCount})` : "Υπηρεσία";
   return (
     <div className="rounded-2xl border border-bronze/15 bg-ink-900 p-5">
       <p className="mb-3 text-sm font-semibold uppercase tracking-widest text-bronze">Σύνοψη</p>
       <ul className="space-y-3 text-sm">
-        <SummaryItem label="Υπηρεσία" value={service?.name ?? "—"} onChange={service ? () => onChange("service") : undefined} />
+        <SummaryItem label={serviceLabel} value={serviceName ?? "—"} onChange={serviceName ? () => onChange("service") : undefined} />
         {multiBarber && <SummaryItem label="Κουρέας" value={barberLabel ?? "—"} onChange={barberLabel ? () => onChange("barber") : undefined} />}
-        <SummaryItem label="Ημέρα & ώρα" value={dateLabel && time ? `${dateLabel} · ${time}` : "—"} onChange={service ? () => onChange("when") : undefined} />
-        <SummaryItem label="Διάρκεια" value={service?.durationLabel ?? "—"} />
+        <SummaryItem label="Ημέρα & ώρα" value={dateLabel && time ? `${dateLabel} · ${time}` : "—"} onChange={serviceName ? () => onChange("when") : undefined} />
+        <SummaryItem label="Διάρκεια" value={durationLabel ?? "—"} />
       </ul>
       <div className="mt-4 flex items-center justify-between border-t border-bronze/10 pt-4">
         <span className="text-sm text-bone-muted">Σύνολο</span>
-        <span className="font-display text-xl font-semibold text-bone">{service?.priceLabel ?? "—"}</span>
+        <span className="font-display text-xl font-semibold text-bone">{priceLabel ?? "—"}</span>
       </div>
       <p className="mt-1 text-xs text-bone-dim">Πληρωμή στο κατάστημα</p>
+      {showCta && (
+        <button
+          type="button"
+          disabled={!canContinue || submitting}
+          onClick={onPrimary}
+          className="mt-4 w-full rounded-full bg-bronze px-6 py-3 text-base font-semibold text-ink-950 transition-colors hover:bg-bronze-light disabled:opacity-40"
+        >
+          {ctaLabel}
+        </button>
+      )}
     </div>
   );
 }
@@ -856,9 +964,9 @@ function MobileBar({
   submitting: boolean;
   onPrimary: () => void;
 }) {
-  // Στα βήματα service/barber δεν χρειάζεται μπάρα (η επιλογή προχωρά αυτόματα).
-  if (step === "service" || step === "barber") return null;
-  const showButton = step === "when" || step === "details";
+  // Στο βήμα «κουρέας» η επιλογή προχωρά αυτόματα — δεν χρειάζεται μπάρα.
+  if (step === "barber") return null;
+  const showButton = step === "service" || step === "when" || step === "details";
   const label = step === "details" ? (submitting ? "Γίνεται κράτηση…" : "Επιβεβαίωση") : "Συνέχεια";
   return (
     <div

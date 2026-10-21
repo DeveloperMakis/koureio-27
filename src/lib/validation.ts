@@ -20,13 +20,15 @@ const phone = z
   }, "Συμπληρώστε έγκυρο τηλέφωνο");
 
 export const availabilityQuerySchema = z.object({
-  serviceId: z.string().min(1),
+  serviceId: z.string().min(1).optional(),
+  serviceIds: z.string().min(1).optional(), // CSV: "id1,id2"
   date: dateStr,
   barberId: z.string().min(1).optional(),
 });
 
 export const firstAvailableQuerySchema = z.object({
-  serviceId: z.string().min(1),
+  serviceId: z.string().min(1).optional(),
+  serviceIds: z.string().min(1).optional(), // CSV
   barberId: z.string().min(1).optional(),
   fromDate: dateStr.optional(),
 });
@@ -56,16 +58,32 @@ export const waitlistSchema = z.object({
     }, "Συμπληρώστε έγκυρο τηλέφωνο"),
 });
 
-export const createBookingSchema = z.object({
-  serviceId: z.string().min(1, "Επιλέξτε υπηρεσία"),
-  barberId: z.string().min(1).optional(), // λείπει = χωρίς προτίμηση
-  date: dateStr,
-  time: timeStr,
-  customerName: z.string().trim().min(2, "Συμπληρώστε το όνομά σας").max(80),
-  customerPhone: phone,
-  customerEmail: z.union([z.string().trim().email("Μη έγκυρο email"), z.literal("")]).optional(),
-  notes: z.string().trim().max(500).optional(),
-});
+// Μία ή περισσότερες υπηρεσίες: δέχεται `serviceIds` (πίνακας) ή legacy `serviceId`.
+const serviceSelection = {
+  serviceId: z.string().min(1).optional(),
+  serviceIds: z.array(z.string().min(1)).min(1).max(5).optional(),
+};
+const requireService = (d: { serviceId?: string; serviceIds?: string[] }) =>
+  (d.serviceIds?.length ?? 0) > 0 || !!d.serviceId;
+
+/** Ενοποιεί serviceId/serviceIds σε μοναδικό πίνακα id (διατηρεί σειρά, χωρίς διπλά). */
+export function normalizeServiceIds(input: { serviceId?: string; serviceIds?: string[] }): string[] {
+  const raw = input.serviceIds?.length ? input.serviceIds : input.serviceId ? [input.serviceId] : [];
+  return Array.from(new Set(raw));
+}
+
+export const createBookingSchema = z
+  .object({
+    ...serviceSelection,
+    barberId: z.string().min(1).optional(), // λείπει = χωρίς προτίμηση
+    date: dateStr,
+    time: timeStr,
+    customerName: z.string().trim().min(2, "Συμπληρώστε το όνομά σας").max(80),
+    customerPhone: phone,
+    customerEmail: z.union([z.string().trim().email("Μη έγκυρο email"), z.literal("")]).optional(),
+    notes: z.string().trim().max(500).optional(),
+  })
+  .refine(requireService, { message: "Επιλέξτε τουλάχιστον μία υπηρεσία", path: ["serviceIds"] });
 
 export type CreateBookingInput = z.infer<typeof createBookingSchema>;
 
@@ -100,13 +118,15 @@ export const profileUpdateSchema = z.object({
   notifyPush: z.boolean().optional(),
 });
 
-export const mobileBookingSchema = z.object({
-  serviceId: z.string().min(1),
-  barberId: z.string().min(1).optional(),
-  date: dateStr,
-  time: timeStr,
-  notes: z.string().trim().max(500).optional(),
-});
+export const mobileBookingSchema = z
+  .object({
+    ...serviceSelection,
+    barberId: z.string().min(1).optional(),
+    date: dateStr,
+    time: timeStr,
+    notes: z.string().trim().max(500).optional(),
+  })
+  .refine(requireService, { message: "Επιλέξτε τουλάχιστον μία υπηρεσία", path: ["serviceIds"] });
 
 export const adminLoginSchema = z.object({
   email: z.string().trim().email("Μη έγκυρο email"),

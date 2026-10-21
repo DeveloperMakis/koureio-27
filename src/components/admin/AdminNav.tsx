@@ -7,6 +7,7 @@ const links = [
   { href: "/admin", label: "Ραντεβού" },
   { href: "/admin/services", label: "Υπηρεσίες" },
   { href: "/admin/closures", label: "Κλεισίματα" },
+  { href: "/admin/promotions", label: "Προσφορές" },
   { href: "/admin/waitlist", label: "Αναμονή" },
 ];
 

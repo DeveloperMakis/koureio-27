@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { createClosureAction, deleteClosureAction } from "@/app/admin/actions";
+import { createClosureAction, deleteClosureAction, seedGreekHolidaysAction } from "@/app/admin/actions";
 import { athensParts, formatAthensDateLong, formatAthensTime, todayAthens } from "@/lib/datetime";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,9 @@ export default async function AdminClosuresPage() {
 
   const inputCls =
     "w-full rounded-lg border border-bronze/20 bg-ink-950 px-3 py-2 text-sm text-bone outline-none focus:border-bronze";
+
+  const currentYear = Number(todayAthens().slice(0, 4));
+  const nextYear = currentYear + 1;
 
   function describe(start: Date, end: Date): string {
     const sp = athensParts(start);
@@ -76,6 +79,30 @@ export default async function AdminClosuresPage() {
         >
           Προσθήκη
         </button>
+      </form>
+
+      {/* Ελληνικές αργίες */}
+      <form action={seedGreekHolidaysAction} className="mt-6 rounded-2xl border border-bronze/15 bg-ink-900 p-5">
+        <h2 className="mb-1 font-semibold text-bone">Ελληνικές αργίες</h2>
+        <p className="mb-4 text-sm text-bone-muted">
+          Προσθέτει αυτόματα τις επίσημες αργίες (Πρωτοχρονιά, Πάσχα, Δεκαπενταύγουστος, 28η Οκτωβρίου κ.λπ.)
+          ως ολοήμερα κλεισίματα. Όσες υπάρχουν ήδη παραλείπονται.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-sm">
+            <span className="mb-1 block text-bone-muted">Έτος</span>
+            <select name="year" className={inputCls} defaultValue={currentYear}>
+              <option value={currentYear}>{currentYear}</option>
+              <option value={nextYear}>{nextYear}</option>
+            </select>
+          </label>
+          <button
+            type="submit"
+            className="rounded-full border border-bronze/40 px-5 py-2 text-sm font-semibold text-bronze-light hover:bg-bronze hover:text-ink-950"
+          >
+            Προσθήκη αργιών
+          </button>
+        </div>
       </form>
 
       {/* Λίστα */}

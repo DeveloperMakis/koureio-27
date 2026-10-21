@@ -29,6 +29,89 @@ const hours = {
   6: [["10:00", "17:00"]],
 };
 
+// --- Ελληνικές αργίες (ίδια λογική με src/lib — αυτόνομο για το boot) ---
+function tzOffsetMinutes(instant) {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Athens", hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const m = {};
+  for (const p of dtf.formatToParts(instant)) if (p.type !== "literal") m[p.type] = Number(p.value);
+  const hour = m.hour === 24 ? 0 : m.hour;
+  return (Date.UTC(m.year, m.month - 1, m.day, hour, m.minute, m.second) - instant.getTime()) / 60000;
+}
+function athensWallToUtc(dateStr, timeStr) {
+  const [y, mo, d] = dateStr.split("-").map(Number);
+  const [h, mi] = timeStr.split(":").map(Number);
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  const o1 = tzOffsetMinutes(new Date(guess));
+  let utc = guess - o1 * 60000;
+  const o2 = tzOffsetMinutes(new Date(utc));
+  if (o2 !== o1) utc = guess - o2 * 60000;
+  return new Date(utc);
+}
+function toDateStr(dt) {
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+function addDaysStr(dateStr, n) {
+  const [y, mo, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return toDateStr(dt);
+}
+function orthodoxEaster(year) {
+  const a = year % 4, b = year % 7, c = year % 19;
+  const d = (19 * c + 15) % 30;
+  const e = (2 * a + 4 * b - d + 34) % 7;
+  const month = Math.floor((d + e + 114) / 31);
+  const day = ((d + e + 114) % 31) + 1;
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  dt.setUTCDate(dt.getUTCDate() + 13);
+  return toDateStr(dt);
+}
+function greekHolidays(year) {
+  const easter = orthodoxEaster(year);
+  return [
+    { date: `${year}-01-01`, name: "Πρωτοχρονιά" },
+    { date: `${year}-01-06`, name: "Θεοφάνεια" },
+    { date: addDaysStr(easter, -48), name: "Καθαρά Δευτέρα" },
+    { date: `${year}-03-25`, name: "Ευαγγελισμός / 25η Μαρτίου" },
+    { date: addDaysStr(easter, -2), name: "Μεγάλη Παρασκευή" },
+    { date: addDaysStr(easter, 1), name: "Δευτέρα του Πάσχα" },
+    { date: `${year}-05-01`, name: "Εργατική Πρωτομαγιά" },
+    { date: addDaysStr(easter, 50), name: "Αγίου Πνεύματος" },
+    { date: `${year}-08-15`, name: "Κοίμηση της Θεοτόκου" },
+    { date: `${year}-10-28`, name: "Επέτειος του «Όχι»" },
+    { date: `${year}-12-25`, name: "Χριστούγεννα" },
+    { date: `${year}-12-26`, name: "Δεύτερη ημέρα Χριστουγέννων" },
+  ];
+}
+async function seedHolidays() {
+  const year = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Athens", year: "numeric" }).format(new Date()));
+  for (const y of [year, year + 1]) {
+    const ys = athensWallToUtc(`${y}-01-01`, "00:00");
+    const ye = athensWallToUtc(`${y + 1}-01-01`, "00:00");
+    const existing = await prisma.closure.findMany({
+      where: { barberId: null, startAt: { gte: ys, lt: ye } },
+      select: { startAt: true, endAt: true },
+    });
+    const covers = (ds) => {
+      const s = athensWallToUtc(ds, "00:00");
+      const e = athensWallToUtc(addDaysStr(ds, 1), "00:00");
+      return existing.some((c) => c.startAt <= s && c.endAt >= e);
+    };
+    const toCreate = greekHolidays(y)
+      .filter((h) => !covers(h.date))
+      .map((h) => ({
+        barberId: null,
+        startAt: athensWallToUtc(h.date, "00:00"),
+        endAt: athensWallToUtc(addDaysStr(h.date, 1), "00:00"),
+        reason: `Αργία: ${h.name}`,
+      }));
+    if (toCreate.length) await prisma.closure.createMany({ data: toCreate });
+  }
+}
+
 async function main() {
   for (const s of services) {
     await prisma.service.upsert({
@@ -47,6 +130,9 @@ async function main() {
       }
     }
   }
+
+  // Ελληνικές αργίες (τρέχον + επόμενο έτος) — idempotent.
+  await seedHolidays();
 
   const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD || "";

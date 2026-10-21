@@ -4,7 +4,7 @@ import { bookingConfig } from "@/config/booking";
 import { business } from "@/config/business";
 import { photos } from "@/config/photos";
 import { formatPrice, formatDuration } from "@/lib/money";
-import { todayAthens, addDays, weekdayOf, WEEKDAYS_EL, MONTHS_EL } from "@/lib/datetime";
+import { todayAthens, addDays, weekdayOf, athensWallToUtc, WEEKDAYS_EL, MONTHS_EL } from "@/lib/datetime";
 import { BookingFlow } from "@/components/booking/BookingFlow";
 import { BookingUnavailable } from "@/components/booking/BookingUnavailable";
 
@@ -52,6 +52,23 @@ export async function BookingScreen({ initialServiceSlug }: { initialServiceSlug
   }));
 
   const today = todayAthens();
+
+  // Ολοήμερα κλεισίματα όλου του καταστήματος (π.χ. αργίες) → σημαίνονται «κλειστά».
+  const lastDate = addDays(today, bookingConfig.maxAdvanceDays);
+  const shopClosures = await prisma.closure.findMany({
+    where: {
+      barberId: null,
+      startAt: { lt: athensWallToUtc(addDays(lastDate, 1), "00:00") },
+      endAt: { gt: athensWallToUtc(today, "00:00") },
+    },
+    select: { startAt: true, endAt: true },
+  });
+  function fullyClosed(dateStr: string): boolean {
+    const dayStart = athensWallToUtc(dateStr, "00:00");
+    const dayEnd = athensWallToUtc(addDays(dateStr, 1), "00:00");
+    return shopClosures.some((c) => c.startAt <= dayStart && c.endAt >= dayEnd);
+  }
+
   const dates = Array.from({ length: bookingConfig.maxAdvanceDays + 1 }).map((_, i) => {
     const value = addDays(today, i);
     const wd = weekdayOf(value);
@@ -60,7 +77,7 @@ export async function BookingScreen({ initialServiceSlug }: { initialServiceSlug
       weekdayShort: WEEKDAYS_EL[wd].slice(0, 3),
       dayNum: Number(value.split("-")[2]),
       monthShort: MONTHS_EL[Number(value.split("-")[1]) - 1].slice(0, 3),
-      closed: (business.hours[wd] ?? []).length === 0,
+      closed: (business.hours[wd] ?? []).length === 0 || fullyClosed(value),
     };
   });
 

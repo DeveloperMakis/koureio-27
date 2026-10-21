@@ -9,6 +9,7 @@ import { serviceUpdateSchema, closureCreateSchema } from "@/lib/validation";
 import { notifyCancellationSms } from "@/lib/notify";
 import { enqueueNotification } from "@/lib/notify-events";
 import { createOffer } from "@/lib/waitlist-offer";
+import { greekHolidays } from "@/lib/greek-holidays";
 
 async function guard() {
   const id = await getCurrentAdminId();
@@ -100,6 +101,98 @@ export async function deleteClosureAction(formData: FormData) {
   await prisma.closure.delete({ where: { id } }).catch(() => {});
   revalidatePath("/admin/closures");
   revalidatePublic();
+}
+
+/**
+ * Προσθέτει τις επίσημες ελληνικές αργίες ενός έτους ως ολοήμερα κλεισίματα
+ * (όλο το κατάστημα). Idempotent: παραλείπει όσες ήδη υπάρχουν ως ολοήμερο
+ * κλείσιμο εκείνη την ημέρα.
+ */
+export async function seedGreekHolidaysAction(formData: FormData) {
+  await guard();
+  const year = Number(formData.get("year"));
+  if (!Number.isInteger(year) || year < 2024 || year > 2099) return;
+
+  const holidays = greekHolidays(year);
+  const yearStart = athensWallToUtc(`${year}-01-01`, "00:00");
+  const yearEnd = athensWallToUtc(`${year + 1}-01-01`, "00:00");
+
+  // Υπάρχοντα ολοήμερα κλεισίματα καταστήματος μέσα στο έτος.
+  const existing = await prisma.closure.findMany({
+    where: { barberId: null, startAt: { gte: yearStart, lt: yearEnd } },
+    select: { startAt: true, endAt: true },
+  });
+  const coversDay = (dateStr: string) => {
+    const dayStart = athensWallToUtc(dateStr, "00:00");
+    const dayEnd = athensWallToUtc(addDays(dateStr, 1), "00:00");
+    return existing.some((c) => c.startAt <= dayStart && c.endAt >= dayEnd);
+  };
+
+  const toCreate = holidays
+    .filter((h) => !coversDay(h.date))
+    .map((h) => ({
+      barberId: null,
+      startAt: athensWallToUtc(h.date, "00:00"),
+      endAt: athensWallToUtc(addDays(h.date, 1), "00:00"),
+      reason: `Αργία: ${h.name}`,
+    }));
+
+  if (toCreate.length > 0) {
+    await prisma.closure.createMany({ data: toCreate });
+  }
+  revalidatePath("/admin/closures");
+  revalidatePublic();
+}
+
+// ---- Προσφορές / ανακοινώσεις προς πελάτες ----
+
+export async function createPromotionAction(formData: FormData) {
+  await guard();
+  const title = String(formData.get("title") ?? "").trim();
+  const body = String(formData.get("body") ?? "").trim();
+  if (title.length < 2 || body.length < 2) return;
+  await prisma.promotion.create({ data: { title: title.slice(0, 120), body: body.slice(0, 500) } });
+  revalidatePath("/admin/promotions");
+}
+
+export async function deletePromotionAction(formData: FormData) {
+  await guard();
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+  await prisma.promotion.delete({ where: { id } }).catch(() => {});
+  revalidatePath("/admin/promotions");
+}
+
+/**
+ * Αποστολή προσφοράς σε ΟΛΟΥΣ τους πελάτες (inbox + push μέσω outbox).
+ * Idempotent ανά πελάτη (dedupeKey). Επαναλαμβανόμενη κλήση δεν ξαναστέλνει.
+ */
+export async function sendPromotionAction(formData: FormData) {
+  await guard();
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+  const promo = await prisma.promotion.findUnique({ where: { id } });
+  if (!promo) return;
+
+  const customers = await prisma.customer.findMany({
+    where: { notifyPush: true },
+    select: { id: true },
+  });
+  for (const c of customers) {
+    await enqueueNotification(prisma, {
+      customerId: c.id,
+      type: "promotion",
+      title: promo.title,
+      body: promo.body,
+      dedupeKey: `promo:${promo.id}:${c.id}`,
+      data: { screen: "notifications", promotionId: promo.id },
+    });
+  }
+  await prisma.promotion.update({
+    where: { id },
+    data: { sentAt: new Date(), recipients: customers.length },
+  });
+  revalidatePath("/admin/promotions");
 }
 
 export async function createOfferAction(formData: FormData) {

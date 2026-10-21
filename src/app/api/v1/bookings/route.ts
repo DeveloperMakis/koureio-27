@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
   const result = await createBooking(
     {
       serviceId: parsed.data.serviceId,
+      serviceIds: parsed.data.serviceIds,
       barberId: parsed.data.barberId,
       date: parsed.data.date,
       time: parsed.data.time,

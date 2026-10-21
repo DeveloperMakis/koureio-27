@@ -121,6 +121,11 @@ model Booking {
 
   notifications NotificationLog[]
 
+  // Πολλαπλές υπηρεσίες ανά ραντεβού (π.χ. κούρεμα + ξύρισμα). Το `serviceId`
+  // παραμένει η ΚΥΡΙΑ υπηρεσία· τα `serviceName/priceCents/durationMin` είναι
+  // αθροιστικό στιγμιότυπο όλων των υπηρεσιών.
+  items         BookingService[]
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -238,6 +243,35 @@ model NotificationLog {
 
   @@index([bookingId])
   @@index([status])
+}
+
+/// Γραμμή υπηρεσίας μέσα σε ένα ραντεβού (στιγμιότυπο τιμής/διάρκειας/ονόματος).
+model BookingService {
+  id          String  @id @default(cuid())
+  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  bookingId   String
+  serviceId   String
+  name        String
+  durationMin Int
+  priceCents  Int?
+  order       Int     @default(0)
+
+  @@index([bookingId])
+}
+
+/// Προσφορά/ανακοίνωση προς τους πελάτες της εφαρμογής. Όταν αποσταλεί,
+/// δημιουργείται inbox + push σε κάθε πελάτη (με notifyPush). Διαχειρίζεται
+/// πλήρως από το admin.
+model Promotion {
+  id        String    @id @default(cuid())
+  title     String
+  body      String
+  active    Boolean   @default(true)
+  sentAt    DateTime? // πότε στάλθηκε μαζικά (null = δεν έχει σταλεί ακόμη)
+  recipients Int      @default(0) // σε πόσους πελάτες στάλθηκε
+  createdAt DateTime  @default(now())
+
+  @@index([active, createdAt])
 }
 
 /// Αίτημα λίστας αναμονής (ΔΕΝ είναι επιβεβαιωμένο ραντεβού).
