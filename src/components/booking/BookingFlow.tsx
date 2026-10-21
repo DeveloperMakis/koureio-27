@@ -359,9 +359,9 @@ export function BookingFlow({
   );
 
   return (
-    <div className="md:grid md:grid-cols-[1fr_20rem] md:gap-8">
-      {/* Κύρια ροή */}
-      <div className="pb-6 md:pb-0">
+    <div className="md:grid md:grid-cols-[minmax(0,1fr)_20rem] md:gap-8">
+      {/* Κύρια ροή — min-w-0 ώστε η στήλη να μη «φουσκώνει» από τη λωρίδα ημερών. */}
+      <div className="min-w-0 pb-6 md:pb-0">
         <Stepper steps={steps} current={stepIdx} />
 
         {step === "service" && (

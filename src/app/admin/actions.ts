@@ -164,6 +164,40 @@ export async function deletePromotionAction(formData: FormData) {
   revalidatePath("/admin/promotions");
 }
 
+/**
+ * Ενημέρωση εβδομαδιαίου ωραρίου ενός κουρέα (ένα διάστημα ανά ημέρα).
+ * Οι διαθέσιμες ώρες ραντεβού υπολογίζονται από αυτό το ωράριο.
+ */
+export async function updateHoursAction(formData: FormData) {
+  await guard();
+  const barberId = String(formData.get("barberId") ?? "");
+  if (!barberId) return;
+  const barber = await prisma.barber.findUnique({ where: { id: barberId }, select: { id: true } });
+  if (!barber) return;
+
+  const timeRe = /^\d{2}:\d{2}$/;
+  const rows: { dayOfWeek: number; open: string; close: string }[] = [];
+  for (let day = 0; day <= 6; day++) {
+    const open = String(formData.get(`open_${day}`) ?? "").trim();
+    const close = String(formData.get(`close_${day}`) ?? "").trim();
+    // Κενό = κλειστά εκείνη την ημέρα.
+    if (!open || !close) continue;
+    if (!timeRe.test(open) || !timeRe.test(close) || open >= close) continue;
+    rows.push({ dayOfWeek: day, open, close });
+  }
+
+  // Αντικατάσταση όλου του ωραρίου του κουρέα ατομικά.
+  await prisma.$transaction([
+    prisma.barberSchedule.deleteMany({ where: { barberId } }),
+    ...rows.map((r) =>
+      prisma.barberSchedule.create({ data: { barberId, dayOfWeek: r.dayOfWeek, open: r.open, close: r.close } }),
+    ),
+  ]);
+
+  revalidatePath("/admin/hours");
+  revalidatePublic();
+}
+
 // ---- Instagram ----
 
 export async function setInstagramTokenAction(formData: FormData) {

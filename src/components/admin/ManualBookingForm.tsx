@@ -1,11 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 interface Opt {
   id: string;
   name: string;
+}
+
+interface CustomerMatch {
+  name: string;
+  phone: string;
 }
 
 export function ManualBookingForm({
@@ -28,6 +33,46 @@ export function ManualBookingForm({
   const [notes, setNotes] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Αναζήτηση υπάρχοντος πελάτη καθώς γράφει ο ιδιοκτήτης (admin only).
+  const [matches, setMatches] = useState<CustomerMatch[]>([]);
+  const [showMatches, setShowMatches] = useState(false);
+  const pickedRef = useRef(false); // μόλις επιλέχθηκε πελάτης → μη ξανακάνεις αναζήτηση
+
+  useEffect(() => {
+    if (pickedRef.current) {
+      pickedRef.current = false;
+      return;
+    }
+    const q = name.trim();
+    if (q.length < 2) {
+      setMatches([]);
+      setShowMatches(false);
+      return;
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/admin/customers?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
+        const d = await r.json();
+        setMatches(d.results ?? []);
+        setShowMatches((d.results ?? []).length > 0);
+      } catch {
+        /* αγνόησε — απλώς δεν δείχνουμε προτάσεις */
+      }
+    }, 250);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [name]);
+
+  function pickCustomer(c: CustomerMatch) {
+    pickedRef.current = true;
+    setName(c.name);
+    setPhone(c.phone);
+    setShowMatches(false);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -109,9 +154,34 @@ export function ManualBookingForm({
           <span className="mb-1 block text-bone-muted">Ώρα</span>
           <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputCls} required />
         </label>
-        <label className="text-sm">
+        <label className="relative text-sm">
           <span className="mb-1 block text-bone-muted">Όνομα πελάτη</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} required />
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onFocus={() => matches.length > 0 && setShowMatches(true)}
+            autoComplete="off"
+            className={inputCls}
+            required
+          />
+          {showMatches && matches.length > 0 && (
+            <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-lg border border-bronze/30 bg-ink-950 shadow-lg">
+              <p className="border-b border-bronze/10 px-3 py-1.5 text-[0.7rem] uppercase tracking-wide text-bone-dim">
+                Υπάρχοντες πελάτες
+              </p>
+              {matches.map((c, i) => (
+                <button
+                  key={`${c.name}-${c.phone}-${i}`}
+                  type="button"
+                  onClick={() => pickCustomer(c)}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-bronze/10"
+                >
+                  <span className="text-bone">{c.name}</span>
+                  <span className="text-xs text-bone-dim">{c.phone || "—"}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </label>
         <label className="text-sm">
           <span className="mb-1 block text-bone-muted">Τηλέφωνο (προαιρετικό)</span>
