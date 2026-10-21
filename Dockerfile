@@ -32,6 +32,9 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=build /app/node_modules/prisma ./node_modules/prisma
+# Deps που χρειάζεται ΜΟΝΟ το prod-setup script (το Next τα κάνει bundle, δεν μένουν
+# στο standalone node_modules). Χωρίς αυτά το prod-setup κρασάρει στο import.
+COPY --from=build /app/node_modules/bcryptjs ./node_modules/bcryptjs
 COPY --from=build /app/scripts/prod-setup.mjs ./scripts/prod-setup.mjs
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x docker-entrypoint.sh
