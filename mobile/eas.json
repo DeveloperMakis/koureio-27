@@ -14,13 +14,13 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://staging.example.gr"
+        "EXPO_PUBLIC_API_BASE_URL": "https://barbershop.install.gr"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://example.gr"
+        "EXPO_PUBLIC_API_BASE_URL": "https://barbershop.install.gr"
       }
     }
   },

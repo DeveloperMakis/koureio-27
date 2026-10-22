@@ -37,7 +37,7 @@
     ],
     "experiments": { "typedRoutes": false },
     "extra": {
-      "apiBaseUrl": "http://localhost:3000"
+      "apiBaseUrl": "https://barbershop.install.gr"
     }
   }
 }
