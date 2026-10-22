@@ -63,6 +63,33 @@ export function ManualBookingForm({
   const [showMatches, setShowMatches] = useState(false);
   const pickedRef = useRef(false); // μόλις επιλέχθηκε πελάτης → μη ξανακάνεις αναζήτηση
 
+  // Διαθέσιμες ώρες για γρήγορη επιλογή (κλικ αντί για πληκτρολόγηση).
+  const [slots, setSlots] = useState<string[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !serviceId || !date) {
+      setSlots([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    setSlotsLoading(true);
+    (async () => {
+      try {
+        const qs = new URLSearchParams({ serviceId, date });
+        if (barberId) qs.set("barberId", barberId);
+        const r = await fetch(`/api/availability?${qs.toString()}`, { signal: ctrl.signal });
+        const d = await r.json();
+        setSlots(Array.isArray(d.anySlots) ? d.anySlots : []);
+      } catch {
+        /* ignore */
+      } finally {
+        setSlotsLoading(false);
+      }
+    })();
+    return () => ctrl.abort();
+  }, [open, serviceId, barberId, date]);
+
   useEffect(() => {
     if (pickedRef.current) {
       pickedRef.current = false;
@@ -192,6 +219,32 @@ export function ManualBookingForm({
           >
             {findingNext ? "Αναζήτηση…" : "⚡ Επόμενο διαθέσιμο"}
           </button>
+        </div>
+
+        {/* Γρήγορη επιλογή: διαθέσιμες ώρες με ένα κλικ */}
+        <div className="sm:col-span-2">
+          <span className="mb-1 block text-xs text-bone-dim">
+            Διαθέσιμες ώρες {slotsLoading ? "…" : date ? "" : "(διάλεξε ημερομηνία)"}
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {slots.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTime(t)}
+                className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+                  time === t
+                    ? "border-bronze bg-bronze text-ink-950"
+                    : "border-bronze/20 bg-ink-950 text-bone hover:border-bronze/50"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+            {!slotsLoading && date && slots.length === 0 && (
+              <span className="text-xs text-bone-dim">Καμία διαθέσιμη ώρα (μπορείς να γράψεις χειροκίνητα πάνω).</span>
+            )}
+          </div>
         </div>
         <label className="text-sm sm:col-span-2">
           <span className="mb-1 block text-bone-muted">Επανάληψη</span>
