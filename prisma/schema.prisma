@@ -263,6 +263,18 @@ model NotificationLog {
   @@index([status])
 }
 
+/// Φωτογραφίες που ανεβάζει ο ιδιοκτήτης από το admin (αποθήκευση στο volume).
+/// slot: "hero" | "contact" | "gallery" (το gallery δέχεται πολλές, με order).
+model SitePhoto {
+  id        String   @id @default(cuid())
+  slot      String
+  localPath String
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([slot, order])
+}
+
 /// Γενικές ρυθμίσεις key/value (π.χ. Instagram token) — server-side μυστικά.
 model AppSetting {
   key       String   @id

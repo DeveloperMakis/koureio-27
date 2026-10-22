@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 const links = [
   { href: "/admin", label: "Ραντεβού" },
   { href: "/admin/services", label: "Υπηρεσίες" },
+  { href: "/admin/photos", label: "Φωτογραφίες" },
   { href: "/admin/hours", label: "Ωράριο" },
   { href: "/admin/closures", label: "Αργίες & κλεισίματα" },
   { href: "/admin/promotions", label: "Προσφορές" },

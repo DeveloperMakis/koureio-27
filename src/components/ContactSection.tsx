@@ -4,8 +4,10 @@ import { OpenNow } from "@/components/OpenNow";
 import { MapReveal } from "@/components/MapReveal";
 import { SectionImage } from "@/components/SectionImage";
 import { photos } from "@/config/photos";
+import { contactOverride } from "@/lib/site-photos";
 
-export function ContactSection() {
+export async function ContactSection() {
+  const contactPhoto = (await contactOverride()) ?? photos.contact;
   const today = athensParts(new Date()).weekday;
   // Ελληνική σειρά: Δευτέρα → Κυριακή
   const order = [1, 2, 3, 4, 5, 6, 0];
@@ -91,7 +93,7 @@ export function ContactSection() {
 
       <div className="space-y-4">
         <SectionImage
-          photo={photos.contact}
+          photo={contactPhoto}
           label="Πρόσοψη καταστήματος"
           ratio="aspect-[16/10]"
           sizes="(max-width: 768px) 100vw, 50vw"

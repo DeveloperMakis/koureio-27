@@ -10,6 +10,7 @@ import { Faq } from "@/components/Faq";
 import { ReviewsSection } from "@/components/ReviewsSection";
 import { ContactSection } from "@/components/ContactSection";
 import { getGalleryMedia } from "@/lib/instagram";
+import { heroOverride, galleryOverride } from "@/lib/site-photos";
 
 // Η αρχική διαβάζει ενεργές υπηρεσίες από τη βάση και δείχνει «Ανοιχτά τώρα»·
 // render ανά αίτημα (όχι static) ώστε να είναι πάντα ενημερωμένη.
@@ -18,13 +19,20 @@ export const dynamic = "force-dynamic";
 export default async function HomePage() {
   const confirmedFaqs = faqs.filter((f) => f.confirmed);
 
-  // Gallery: προτεραιότητα στις φωτογραφίες Instagram (αν έχει ρυθμιστεί),
-  // αλλιώς οι στατικές φωτογραφίες της επιχείρησης.
-  const igGallery = await getGalleryMedia(12);
+  // Gallery: Instagram (αν ρυθμισμένο) → ανεβασμένες από admin → στατικές.
+  const [igGallery, uploadedGallery, heroUp] = await Promise.all([
+    getGalleryMedia(12),
+    galleryOverride(),
+    heroOverride(),
+  ]);
   const galleryImages =
     igGallery.length > 0
       ? igGallery.map((m) => ({ src: m.src, alt: m.alt }))
-      : photos.gallery.map((p) => ({ src: p.src, alt: p.alt }));
+      : uploadedGallery.length > 0
+        ? uploadedGallery
+        : photos.gallery.map((p) => ({ src: p.src, alt: p.alt }));
+  // Hero: ανεβασμένη από admin → στατική.
+  const heroPhoto = heroUp ?? photos.hero;
 
   return (
     <>
@@ -71,7 +79,7 @@ export default async function HomePage() {
 
           <Reveal delay={200} className="relative">
             <SectionImage
-              photo={photos.hero}
+              photo={heroPhoto}
               label="Φωτογραφία κουρείου"
               ratio="aspect-[4/5]"
               sizes="(max-width: 768px) 100vw, 50vw"
