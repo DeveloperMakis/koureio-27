@@ -1,6 +1,8 @@
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { MobileBottomBar } from "@/components/MobileBottomBar";
+import { ChatWidget } from "@/components/ChatWidget";
+import { assistantConfigured } from "@/lib/assistant";
 import { business } from "@/config/business";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
@@ -55,6 +57,7 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
       <main id="main">{children}</main>
       <Footer />
       <MobileBottomBar />
+      {assistantConfigured() && <ChatWidget />}
     </div>
   );
 }

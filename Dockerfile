@@ -3,8 +3,8 @@
 
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci --legacy-peer-deps
 
 FROM node:20-bookworm-slim AS build
 WORKDIR /app
