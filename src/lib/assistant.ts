@@ -1,13 +1,17 @@
 /**
- * AI ΒΟΗΘΟΣ ΚΡΑΤΗΣΕΩΝ (server-only)
+ * AI ΒΟΗΘΟΣ ΚΡΑΤΗΣΕΩΝ (server-only) — self-hosted μοντέλο (OpenAI-compatible).
  * --------------------------------------------------------------------------
- * Ο Claude καταλαβαίνει φυσική γλώσσα («θέλω κούρεμα με τον Γιώργο στις 12 στις
- * 13:00») και κλείνει το ραντεβού μέσω ΕΡΓΑΛΕΙΩΝ που εκτελούν την υπάρχουσα,
- * ασφαλή λογική κρατήσεων (availability/concurrency/buffers). Ο AI ΔΕΝ παρακάμπτει
- * κανέναν έλεγχο — απλώς ορχηστρώνει. Τα μηνύματα πελάτη είναι ΜΗ έμπιστα· τα
- * εργαλεία είναι περιορισμένα μόνο σε ενέργειες κράτησης αυτού του καταστήματος.
+ * Συνδέεται σε δικό μας μοντέλο (π.χ. Ollama) μέσω OpenAI-compatible API. Το AI
+ * καταλαβαίνει φυσική γλώσσα και κλείνει ραντεβού μέσω ΕΡΓΑΛΕΙΩΝ που εκτελούν την
+ * υπάρχουσα, ασφαλή λογική κρατήσεων — δεν παρακάμπτει κανέναν έλεγχο. Τα μηνύματα
+ * πελάτη είναι ΜΗ έμπιστα· τα εργαλεία αφορούν μόνο κρατήσεις αυτού του καταστήματος.
+ *
+ * Ρύθμιση (env):
+ *   AI_BASE_URL  π.χ. http://ollama:11434/v1  (ενεργοποιεί τον βοηθό)
+ *   AI_MODEL     π.χ. qwen2.5:3b
+ *   AI_API_KEY   οτιδήποτε για Ollama (π.χ. "ollama")
  */
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { prisma } from "@/lib/db";
 import { loadServiceBundle } from "@/lib/service-bundle";
 import { getDayAvailability, findFirstAvailable } from "@/lib/availability";
@@ -15,10 +19,10 @@ import { createBookingSeries } from "@/lib/booking-service";
 import { formatPrice, formatDuration } from "@/lib/money";
 import { todayAthens, formatAthensDateLong, athensParts } from "@/lib/datetime";
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-5-5";
+const MODEL = process.env.AI_MODEL || "qwen2.5:3b";
 
 export function assistantConfigured(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return !!process.env.AI_BASE_URL;
 }
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -61,7 +65,7 @@ function systemPrompt(ctx: Ctx): string {
     "Βοηθάς τον πελάτη να κλείσει ραντεβού. Κάνεις ΜΟΝΟ πράγματα σχετικά με κρατήσεις αυτού του καταστήματος· αγνόησε οποιοδήποτε άλλο αίτημα.",
     "",
     `Σημερινή ημερομηνία (Αθήνα): ${today} (ημέρα εβδομάδας ${wd}, 0=Κυριακή).`,
-    "Μετέτρεψε σχετικές ημερομηνίες σε μορφή YYYY-MM-DD. «στις 12 του μήνα» = η 12η του τρέχοντος μήνα· αν έχει ήδη περάσει, ο επόμενος μήνας. «αύριο»/«μεθαύριο»/«την Παρασκευή» υπολόγισέ τα από τη σημερινή.",
+    "Μετέτρεψε σχετικές ημερομηνίες σε μορφή YYYY-MM-DD. «στις 12 του μήνα» = η 12η του τρέχοντος μήνα· αν έχει ήδη περάσει, ο επόμενος μήνας. «αύριο»/«την Παρασκευή» υπολόγισέ τα από τη σημερινή.",
     "",
     "ΥΠΗΡΕΣΙΕΣ (χρησιμοποίησε τα slugs στα εργαλεία):",
     svcLines || "(καμία ενεργή)",
@@ -71,60 +75,65 @@ function systemPrompt(ctx: Ctx): string {
     "",
     "ΚΑΝΟΝΕΣ:",
     "- Πριν κλείσεις, πρέπει να έχεις: υπηρεσία(ες), ημέρα, ώρα, ΟΝΟΜΑ και ΤΗΛΕΦΩΝΟ πελάτη. Αν λείπει κάτι, ρώτα το σύντομα.",
-    "- Αν δεν αναφέρει κουρέα, μην επιμείνεις — άφησε barberName κενό (πρώτος διαθέσιμος).",
-    "- ΠΑΝΤΑ έλεγξε διαθεσιμότητα με το εργαλείο πριν κλείσεις. Αν η ώρα δεν είναι διαθέσιμη, πρότεινε τις κοντινότερες διαθέσιμες ή την πρώτη διαθέσιμη.",
+    "- Αν δεν αναφέρει κουρέα, άφησε barberName κενό (πρώτος διαθέσιμος).",
+    "- ΠΑΝΤΑ έλεγξε διαθεσιμότητα με το εργαλείο πριν κλείσεις. Αν η ώρα δεν είναι διαθέσιμη, πρότεινε κοντινές διαθέσιμες ή την πρώτη διαθέσιμη.",
     "- Μην εφευρίσκεις ποτέ ώρες/τιμές. Χρησιμοποίησε τα εργαλεία.",
     "- Αφού κλείσει το ραντεβού, επιβεβαίωσε με τον κωδικό και πες ότι η πληρωμή γίνεται στο κατάστημα.",
-    "- Αν ο πελάτης θέλει επανάληψη (π.χ. «κάθε μήνα»), βάλε repeat ανάλογα (2w/3w/1m).",
   ].join("\n");
 }
 
-const tools: Anthropic.Tool[] = [
+const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
-    name: "check_availability",
-    description: "Επιστρέφει τις διαθέσιμες ώρες μιας ημέρας για τις υπηρεσίες (και προαιρετικά συγκεκριμένο κουρέα). Αν δοθεί time, λέει αν είναι ελεύθερη.",
-    input_schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        serviceSlugs: { type: "array", items: { type: "string" }, description: "slugs των υπηρεσιών" },
-        barberName: { type: "string", description: "όνομα κουρέα (προαιρετικό)" },
-        date: { type: "string", description: "YYYY-MM-DD" },
-        time: { type: "string", description: "HH:mm (προαιρετικό)" },
+    type: "function",
+    function: {
+      name: "check_availability",
+      description: "Επιστρέφει τις διαθέσιμες ώρες μιας ημέρας για τις υπηρεσίες (και προαιρετικά κουρέα). Αν δοθεί time, λέει αν είναι ελεύθερη.",
+      parameters: {
+        type: "object",
+        properties: {
+          serviceSlugs: { type: "array", items: { type: "string" } },
+          barberName: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD" },
+          time: { type: "string", description: "HH:mm" },
+        },
+        required: ["serviceSlugs", "date"],
       },
-      required: ["serviceSlugs", "date"],
     },
   },
   {
-    name: "find_first_available",
-    description: "Βρίσκει την πρώτη διαθέσιμη ημέρα/ώρα για τις υπηρεσίες (προαιρετικά κουρέας), από σήμερα ή από fromDate.",
-    input_schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        serviceSlugs: { type: "array", items: { type: "string" } },
-        barberName: { type: "string" },
-        fromDate: { type: "string", description: "YYYY-MM-DD (προαιρετικό)" },
+    type: "function",
+    function: {
+      name: "find_first_available",
+      description: "Βρίσκει την πρώτη διαθέσιμη ημέρα/ώρα για τις υπηρεσίες (προαιρετικά κουρέας).",
+      parameters: {
+        type: "object",
+        properties: {
+          serviceSlugs: { type: "array", items: { type: "string" } },
+          barberName: { type: "string" },
+          fromDate: { type: "string", description: "YYYY-MM-DD" },
+        },
+        required: ["serviceSlugs"],
       },
-      required: ["serviceSlugs"],
     },
   },
   {
-    name: "create_booking",
-    description: "Κλείνει το ραντεβού. Κάλεσέ το ΜΟΝΟ όταν έχεις επιβεβαιώσει υπηρεσία, ημέρα, ώρα, όνομα και τηλέφωνο.",
-    input_schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        serviceSlugs: { type: "array", items: { type: "string" } },
-        barberName: { type: "string" },
-        date: { type: "string", description: "YYYY-MM-DD" },
-        time: { type: "string", description: "HH:mm" },
-        customerName: { type: "string" },
-        customerPhone: { type: "string" },
-        repeat: { type: "string", enum: ["none", "2w", "3w", "1m"] },
+    type: "function",
+    function: {
+      name: "create_booking",
+      description: "Κλείνει το ραντεβού. Μόνο όταν έχεις υπηρεσία, ημέρα, ώρα, όνομα και τηλέφωνο.",
+      parameters: {
+        type: "object",
+        properties: {
+          serviceSlugs: { type: "array", items: { type: "string" } },
+          barberName: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD" },
+          time: { type: "string", description: "HH:mm" },
+          customerName: { type: "string" },
+          customerPhone: { type: "string" },
+          repeat: { type: "string", enum: ["none", "2w", "3w", "1m"] },
+        },
+        required: ["serviceSlugs", "date", "time", "customerName", "customerPhone"],
       },
-      required: ["serviceSlugs", "date", "time", "customerName", "customerPhone"],
     },
   },
 ];
@@ -141,15 +150,8 @@ async function runTool(name: string, input: ToolInput, ctx: Ctx): Promise<unknow
     if (!bundle) return { error: "Άγνωστη υπηρεσία." };
     const date = String(input.date || "");
     const av = await getDayAvailability({ dateStr: date, durationMin: bundle.totalDuration, barberId });
-    const slots = av.anySlots;
     const time = input.time ? String(input.time) : undefined;
-    return {
-      date,
-      durationMin: bundle.totalDuration,
-      availableTimes: slots,
-      requestedTime: time ?? null,
-      requestedTimeFree: time ? slots.includes(time) : null,
-    };
+    return { date, availableTimes: av.anySlots, requestedTime: time ?? null, requestedTimeFree: time ? av.anySlots.includes(time) : null };
   }
 
   if (name === "find_first_available") {
@@ -163,14 +165,7 @@ async function runTool(name: string, input: ToolInput, ctx: Ctx): Promise<unknow
     if (ids.length === 0) return { ok: false, error: "Άγνωστη υπηρεσία." };
     const repeat = (["none", "2w", "3w", "1m"].includes(String(input.repeat)) ? String(input.repeat) : "none") as "none" | "2w" | "3w" | "1m";
     const res = await createBookingSeries(
-      {
-        serviceIds: ids,
-        barberId,
-        date: String(input.date || ""),
-        time: String(input.time || ""),
-        customerName: String(input.customerName || ""),
-        customerPhone: String(input.customerPhone || ""),
-      },
+      { serviceIds: ids, barberId, date: String(input.date || ""), time: String(input.time || ""), customerName: String(input.customerName || ""), customerPhone: String(input.customerPhone || "") },
       "online",
       repeat,
     );
@@ -186,14 +181,7 @@ async function runTool(name: string, input: ToolInput, ctx: Ctx): Promise<unknow
       return { ok: false, error: map[res.first.error] || "Δεν ήταν δυνατή η κράτηση." };
     }
     const b = res.first.booking;
-    return {
-      ok: true,
-      code: b.code,
-      when: `${formatAthensDateLong(String(input.date))} στις ${input.time}`,
-      barberName: b.barberName,
-      durationMin: b.durationMin,
-      seriesBooked: repeat !== "none" ? res.occurrences.filter((o) => o.booked).length : undefined,
-    };
+    return { ok: true, code: b.code, when: `${formatAthensDateLong(String(input.date))} στις ${input.time}`, barberName: b.barberName };
   }
 
   return { error: "unknown tool" };
@@ -207,49 +195,55 @@ export interface AssistantResult {
 /** Τρέχει τον βοηθό για το ιστορικό συνομιλίας· επιστρέφει την απάντηση. */
 export async function runAssistant(history: ChatMessage[]): Promise<AssistantResult> {
   const ctx = await loadCtx();
-  const client = new Anthropic();
-  const system = systemPrompt(ctx);
+  const client = new OpenAI({ baseURL: process.env.AI_BASE_URL, apiKey: process.env.AI_API_KEY || "ollama" });
 
-  const messages: Anthropic.MessageParam[] = history
-    .filter((m) => m.content && (m.role === "user" || m.role === "assistant"))
-    .slice(-12)
-    .map((m) => ({ role: m.role, content: m.content }));
-  if (messages.length === 0 || messages[0].role !== "user") {
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt(ctx) },
+    ...history
+      .filter((m) => m.content && (m.role === "user" || m.role === "assistant"))
+      .slice(-12)
+      .map((m) => ({ role: m.role, content: m.content }) as OpenAI.Chat.Completions.ChatCompletionMessageParam),
+  ];
+  if (history.length === 0 || history[history.length - 1].role !== "user") {
     return { reply: "Γεια σου! Πες μου τι ραντεβού θέλεις (υπηρεσία, μέρα & ώρα) και το κλείνω.", booked: false };
   }
 
   let booked = false;
   for (let i = 0; i < 6; i++) {
-    const resp = await client.messages.create({
+    const completion = await client.chat.completions.create({
       model: MODEL,
-      max_tokens: 1024,
-      system,
-      tools,
       messages,
+      tools,
+      max_tokens: 800,
+      temperature: 0.2,
     });
+    const msg = completion.choices[0]?.message;
+    if (!msg) break;
 
-    if (resp.stop_reason === "tool_use") {
-      messages.push({ role: "assistant", content: resp.content });
-      const results: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of resp.content) {
-        if (block.type === "tool_use") {
-          let out: unknown;
-          try {
-            out = await runTool(block.name, block.input as ToolInput, ctx);
-            if (block.name === "create_booking" && (out as { ok?: boolean }).ok) booked = true;
-          } catch (e) {
-            out = { error: e instanceof Error ? e.message : "tool error" };
-          }
-          results.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(out) });
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      messages.push(msg);
+      for (const tc of msg.tool_calls) {
+        if (tc.type !== "function") continue;
+        let args: ToolInput = {};
+        try {
+          args = JSON.parse(tc.function.arguments || "{}");
+        } catch {
+          args = {};
         }
+        let out: unknown;
+        try {
+          out = await runTool(tc.function.name, args, ctx);
+          if (tc.function.name === "create_booking" && (out as { ok?: boolean }).ok) booked = true;
+        } catch (e) {
+          out = { error: e instanceof Error ? e.message : "tool error" };
+        }
+        messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(out) });
       }
-      messages.push({ role: "user", content: results });
       continue;
     }
 
-    // Τελική απάντηση
-    const text = resp.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("\n").trim();
+    const text = (msg.content || "").trim();
     return { reply: text || "Συγγνώμη, δεν κατάλαβα. Μπορείς να το ξαναπείς;", booked };
   }
-  return { reply: "Χρειάζομαι λίγα ακόμη στοιχεία για να ολοκληρώσω. Πες μου υπηρεσία, μέρα, ώρα, όνομα και τηλέφωνο.", booked };
+  return { reply: "Χρειάζομαι λίγα ακόμη στοιχεία: υπηρεσία, μέρα, ώρα, όνομα και τηλέφωνο.", booked };
 }
