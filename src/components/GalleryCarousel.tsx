@@ -29,6 +29,8 @@ export function GalleryCarousel({
   const count = hasImages ? images.length : placeholderCount;
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const frameRef = useRef<HTMLDivElement | null>(null);
   const reduceRef = useRef(false);
 
   const placeholderLabels = ["Κούρεμα", "Fade", "Γενειάδα", "Χώρος", "Λεπτομέρεια", "Styling"];
@@ -38,6 +40,23 @@ export function GalleryCarousel({
 
   useEffect(() => {
     reduceRef.current = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (reduceRef.current) {
+      setRevealed(true);
+      return;
+    }
+    const el = frameRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setRevealed(true);
+          io.disconnect();
+        }
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -60px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
   }, []);
 
   useEffect(() => {
@@ -62,7 +81,12 @@ export function GalleryCarousel({
       }}
       tabIndex={0}
     >
-      <div className="relative aspect-[4/3] overflow-hidden rounded-2xl border border-bronze/15 bg-ink-900">
+      <div
+        ref={frameRef}
+        className={`relative aspect-[4/3] overflow-hidden rounded-2xl border border-bronze/15 bg-ink-900 transition-all duration-[1200ms] ease-out will-change-transform ${
+          revealed ? "scale-100 opacity-100 blur-0" : "scale-[1.05] opacity-0 blur-[10px]"
+        }`}
+      >
         {Array.from({ length: count }).map((_, i) => {
           const active = i === index;
           return (
@@ -79,7 +103,7 @@ export function GalleryCarousel({
                   alt={images[i].alt}
                   fill
                   sizes="(max-width: 768px) 100vw, 768px"
-                  className={`object-cover ${active ? "animate-ken-burns" : "scale-[1.04]"}`}
+                  className={`object-cover brightness-[1.1] contrast-[1.04] saturate-[1.06] ${active ? "animate-ken-burns" : "scale-[1.04]"}`}
                   priority={i === 0}
                 />
               ) : (
@@ -95,10 +119,10 @@ export function GalleryCarousel({
         {/* Κινηματογραφικό overlay (βάθος + σβήσιμο + letterbox μπάρες) */}
         {hasImages && (
           <>
-            <div aria-hidden className="pointer-events-none absolute inset-0 bg-gradient-to-t from-ink-950/75 via-ink-950/10 to-ink-950/15" />
-            <div aria-hidden className="pointer-events-none absolute inset-0 shadow-[inset_0_0_180px_rgba(0,0,0,0.75)]" />
-            <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[7%] bg-ink-950" />
-            <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-[7%] bg-ink-950" />
+            <div aria-hidden className="pointer-events-none absolute inset-0 bg-gradient-to-t from-ink-950/55 via-transparent to-transparent" />
+            <div aria-hidden className="pointer-events-none absolute inset-0 shadow-[inset_0_0_130px_rgba(0,0,0,0.42)]" />
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[6%] bg-ink-950" />
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-[6%] bg-ink-950" />
           </>
         )}
 
