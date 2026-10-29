@@ -85,6 +85,7 @@ export default async function HomePage() {
               sizes="(max-width: 768px) 100vw, 50vw"
               priority
               kenBurns
+              letterbox
             />
           </Reveal>
         </div>

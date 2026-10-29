@@ -92,11 +92,13 @@ export function GalleryCarousel({
           );
         })}
 
-        {/* Κινηματογραφικό overlay (βάθος + σβήσιμο στο σκοτάδι) */}
+        {/* Κινηματογραφικό overlay (βάθος + σβήσιμο + letterbox μπάρες) */}
         {hasImages && (
           <>
-            <div aria-hidden className="pointer-events-none absolute inset-0 bg-gradient-to-t from-ink-950/60 via-transparent to-transparent" />
-            <div aria-hidden className="pointer-events-none absolute inset-0 shadow-[inset_0_0_140px_rgba(0,0,0,0.55)]" />
+            <div aria-hidden className="pointer-events-none absolute inset-0 bg-gradient-to-t from-ink-950/75 via-ink-950/10 to-ink-950/15" />
+            <div aria-hidden className="pointer-events-none absolute inset-0 shadow-[inset_0_0_180px_rgba(0,0,0,0.75)]" />
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[7%] bg-ink-950" />
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-[7%] bg-ink-950" />
           </>
         )}
 
