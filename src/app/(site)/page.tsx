@@ -84,6 +84,7 @@ export default async function HomePage() {
               ratio="aspect-[4/5]"
               sizes="(max-width: 768px) 100vw, 50vw"
               priority
+              kenBurns
             />
           </Reveal>
         </div>

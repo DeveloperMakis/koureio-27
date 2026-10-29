@@ -45,10 +45,16 @@ const config: Config = {
           "0%": { opacity: "0" },
           "100%": { opacity: "1" },
         },
+        // Κινηματογραφικό αργό zoom/pan.
+        "ken-burns": {
+          "0%": { transform: "scale(1.04) translate(0, 0)" },
+          "100%": { transform: "scale(1.16) translate(-1.5%, -1.5%)" },
+        },
       },
       animation: {
         "fade-up": "fade-up 0.7s cubic-bezier(0.16,1,0.3,1) both",
         "fade-in": "fade-in 0.8s ease both",
+        "ken-burns": "ken-burns 20s ease-in-out infinite alternate",
       },
     },
   },

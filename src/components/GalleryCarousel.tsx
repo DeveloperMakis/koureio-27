@@ -79,7 +79,7 @@ export function GalleryCarousel({
                   alt={images[i].alt}
                   fill
                   sizes="(max-width: 768px) 100vw, 768px"
-                  className="object-cover"
+                  className={`object-cover ${active ? "animate-ken-burns" : "scale-[1.04]"}`}
                   priority={i === 0}
                 />
               ) : (
@@ -91,6 +91,14 @@ export function GalleryCarousel({
             </div>
           );
         })}
+
+        {/* Κινηματογραφικό overlay (βάθος + σβήσιμο στο σκοτάδι) */}
+        {hasImages && (
+          <>
+            <div aria-hidden className="pointer-events-none absolute inset-0 bg-gradient-to-t from-ink-950/60 via-transparent to-transparent" />
+            <div aria-hidden className="pointer-events-none absolute inset-0 shadow-[inset_0_0_140px_rgba(0,0,0,0.55)]" />
+          </>
+        )}
 
         {/* Live region για screen readers */}
         <span className="sr-only" aria-live="polite">
