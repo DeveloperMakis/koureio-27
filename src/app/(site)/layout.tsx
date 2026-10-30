@@ -2,6 +2,7 @@ import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { MobileBottomBar } from "@/components/MobileBottomBar";
 import { ChatWidget } from "@/components/ChatWidget";
+import { SmoothScroll } from "@/components/SmoothScroll";
 import { assistantConfigured } from "@/lib/assistant";
 import { business } from "@/config/business";
 
@@ -46,6 +47,7 @@ function LocalBusinessJsonLd() {
 export default function SiteLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="pb-[72px] md:pb-0">
+      <SmoothScroll />
       <noscript>
         <style>{`[data-reveal]{opacity:1 !important;transform:none !important}`}</style>
       </noscript>

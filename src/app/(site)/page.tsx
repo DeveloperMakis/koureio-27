@@ -6,6 +6,7 @@ import { SectionImage } from "@/components/SectionImage";
 import { photos } from "@/config/photos";
 import { ServiceList } from "@/components/ServiceList";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
+import { AnimatedHeroTitle } from "@/components/AnimatedHeroTitle";
 import { Faq } from "@/components/Faq";
 import { ReviewsSection } from "@/components/ReviewsSection";
 import { ContactSection } from "@/components/ContactSection";
@@ -49,11 +50,10 @@ export default async function HomePage() {
             <Reveal>
               <p className="text-sm uppercase tracking-widest2 text-bronze">{hero.eyebrow}</p>
             </Reveal>
-            <Reveal delay={80}>
-              <h1 className="mt-4 font-display text-4xl font-semibold leading-[1.1] text-bone sm:text-6xl">
-                {hero.title}
-              </h1>
-            </Reveal>
+            <AnimatedHeroTitle
+              text={hero.title}
+              className="mt-4 font-display text-4xl font-semibold leading-[1.1] text-bone sm:text-6xl"
+            />
             <Reveal delay={160}>
               <p className="mt-5 max-w-md text-base leading-relaxed text-bone-muted sm:text-lg">
                 {hero.subtitle}
@@ -105,8 +105,8 @@ export default async function HomePage() {
       <section id="o-choros" className="scroll-mt-24 border-t border-bronze/10">
         <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-16 sm:px-6 md:grid-cols-2 md:py-24">
           <Reveal className="order-2 grid grid-cols-2 gap-3 md:order-1">
-            <SectionImage photo={photos.space[0]} label="Ο χώρος" ratio="aspect-[3/4]" sizes="(max-width: 768px) 50vw, 25vw" />
-            <SectionImage photo={photos.space[1]} label="Λεπτομέρεια" ratio="aspect-[3/4]" sizes="(max-width: 768px) 50vw, 25vw" className="mt-8" />
+            <SectionImage photo={photos.space[0]} label="Ο χώρος" ratio="aspect-[3/4]" sizes="(max-width: 768px) 50vw, 25vw" parallax />
+            <SectionImage photo={photos.space[1]} label="Λεπτομέρεια" ratio="aspect-[3/4]" sizes="(max-width: 768px) 50vw, 25vw" className="mt-8" parallax />
           </Reveal>
           <div className="order-1 md:order-2">
             <SectionHeading eyebrow="Το κουρείο" title={about.title} />

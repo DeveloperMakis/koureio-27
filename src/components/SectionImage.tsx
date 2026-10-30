@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { gsap } from "gsap";
+import { ScrollTrigger } from "gsap/ScrollTrigger";
 import type { Photo } from "@/config/photos";
 import { PlaceholderImage } from "@/components/PlaceholderImage";
 
@@ -10,7 +12,7 @@ import { PlaceholderImage } from "@/components/PlaceholderImage";
  * responsive, lazy) όταν υπάρχει· αλλιώς διακριτικό προσωρινό πλαίσιο.
  *
  * Κινηματογραφική εμφάνιση: καθώς μπαίνει στο viewport ξεθολώνει, φωτίζει και
- * «κάθεται» (scale→1) — σαν πλάνο που εστιάζει.
+ * «κάθεται» (scale→1). Με `parallax`, η εικόνα κινείται ελαφρά με το scroll (GSAP).
  */
 export function SectionImage({
   photo,
@@ -22,6 +24,7 @@ export function SectionImage({
   cinematic = true,
   kenBurns = false,
   letterbox = false,
+  parallax = false,
 }: {
   photo: Photo | null | undefined;
   label?: string;
@@ -35,8 +38,11 @@ export function SectionImage({
   kenBurns?: boolean;
   /** Μαύρες μπάρες πάνω/κάτω (widescreen look). */
   letterbox?: boolean;
+  /** Ελαφρύ parallax με το scroll (GSAP ScrollTrigger). */
+  parallax?: boolean;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
   // Το hero (priority) φαίνεται αμέσως· τα υπόλοιπα εμφανίζονται στο scroll.
   const [revealed, setRevealed] = useState(priority);
 
@@ -62,6 +68,29 @@ export function SectionImage({
     return () => io.disconnect();
   }, [revealed]);
 
+  // GSAP parallax — η εικόνα «ταξιδεύει» λίγο πιο αργά από το scroll.
+  useEffect(() => {
+    if (!parallax) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return;
+    const el = ref.current;
+    const inner = innerRef.current;
+    if (!el || !inner) return;
+    gsap.registerPlugin(ScrollTrigger);
+    const ctx = gsap.context(() => {
+      gsap.fromTo(
+        inner,
+        { yPercent: -8 },
+        {
+          yPercent: 8,
+          ease: "none",
+          scrollTrigger: { trigger: el, start: "top bottom", end: "bottom top", scrub: true },
+        },
+      );
+    }, el);
+    return () => ctx.revert();
+  }, [parallax]);
+
   if (!photo) {
     return <PlaceholderImage label={label} ratio={ratio} className={className} />;
   }
@@ -72,16 +101,19 @@ export function SectionImage({
         revealed ? "scale-100 opacity-100 blur-0" : "scale-[1.05] opacity-0 blur-[10px]"
       } ${className}`}
     >
-      <Image
-        src={photo.src}
-        alt={photo.alt}
-        fill
-        sizes={sizes}
-        priority={priority}
-        className={`object-cover brightness-[1.1] contrast-[1.04] saturate-[1.06] transition-transform duration-[1400ms] ease-out will-change-transform group-hover:scale-[1.09] ${
-          kenBurns ? "animate-ken-burns" : ""
-        }`}
-      />
+      {/* Εσωτερικό wrapper — με parallax είναι λίγο μεγαλύτερο ώστε να μη φαίνονται άκρα */}
+      <div ref={innerRef} className={`absolute inset-x-0 ${parallax ? "-inset-y-[10%]" : "inset-y-0"}`}>
+        <Image
+          src={photo.src}
+          alt={photo.alt}
+          fill
+          sizes={sizes}
+          priority={priority}
+          className={`object-cover brightness-[1.1] contrast-[1.04] saturate-[1.06] transition-transform duration-[1400ms] ease-out will-change-transform group-hover:scale-[1.09] ${
+            kenBurns ? "animate-ken-burns" : ""
+          }`}
+        />
+      </div>
       {cinematic && (
         <>
           {/* Ελαφρύ σβήσιμο προς τα κάτω — κρατά τις φωτογραφίες φωτεινές */}
