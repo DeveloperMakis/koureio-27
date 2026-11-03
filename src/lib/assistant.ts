@@ -11,9 +11,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/db";
 import { loadServiceBundle } from "@/lib/service-bundle";
 import { getDayAvailability, findFirstAvailable } from "@/lib/availability";
-import { createBookingSeries } from "@/lib/booking-service";
+import { createBookingSeries, rescheduleBooking, cancelBookingByToken } from "@/lib/booking-service";
 import { formatPrice, formatDuration } from "@/lib/money";
-import { todayAthens, formatAthensDateLong, athensParts } from "@/lib/datetime";
+import { todayAthens, formatAthensDateLong, formatAthensTime, athensParts } from "@/lib/datetime";
+import { nationalKey } from "@/lib/otp";
+import { bookingConfig } from "@/config/booking";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-5-5";
 
@@ -51,6 +53,45 @@ function resolveBarberId(name: string | undefined, ctx: Ctx): string | undefined
   return b?.id;
 }
 
+/**
+ * Ασφαλής ταυτοποίηση ραντεβού για τον (μη έμπιστο) πελάτη: απαιτείται ΚΑΙ ο
+ * κωδικός κράτησης ΚΑΙ το τηλέφωνο με το οποίο έγινε. Αλλιώς δεν αποκαλύπτεται
+ * τίποτα — ο βοηθός δεν μπορεί να ακυρώσει/αλλάξει ραντεβού τρίτου.
+ */
+async function findBookingForCustomer(code: string, phone: string) {
+  const c = (code || "").trim().toUpperCase();
+  const key = nationalKey(phone);
+  if (!c || key.length < 10) return null;
+  const b = await prisma.booking.findUnique({ where: { code: c }, include: { barber: true } });
+  if (!b) return null;
+  if (nationalKey(b.customerPhone) !== key) return null; // το τηλέφωνο πρέπει να ταιριάζει
+  return b;
+}
+
+function describeBooking(b: { code: string; serviceName: string; startAt: Date; status: string; barber: { name: string } }) {
+  const p = athensParts(b.startAt);
+  return {
+    code: b.code,
+    service: b.serviceName,
+    date: p.dateStr,
+    time: formatAthensTime(b.startAt),
+    barberName: b.barber.name,
+    status: b.status,
+  };
+}
+
+const MUTATION_ERRORS: Record<string, string> = {
+  SLOT_TAKEN: "Η νέα ώρα δεν είναι διαθέσιμη.",
+  OUTSIDE_HOURS: "Εκτός ωραρίου.",
+  TOO_SOON: "Πολύ κοντά στην ώρα.",
+  TOO_FAR: "Πολύ μακρινή ημερομηνία.",
+  TOO_LATE: `Δεν γίνεται αλλαγή/ακύρωση λιγότερο από ${bookingConfig.selfCancelHours} ώρες πριν. Τηλεφώνησε στο κατάστημα.`,
+  NO_BARBER: "Δεν υπάρχει διαθέσιμος κουρέας.",
+  NOT_FOUND: "Δεν βρέθηκε ραντεβού με αυτά τα στοιχεία.",
+  NOT_CHANGEABLE: "Το ραντεβού δεν μπορεί να αλλάξει.",
+  NOT_CANCELLABLE: "Το ραντεβού δεν μπορεί να ακυρωθεί.",
+};
+
 function systemPrompt(ctx: Ctx): string {
   const today = todayAthens();
   const wd = athensParts(new Date()).weekday;
@@ -76,6 +117,14 @@ function systemPrompt(ctx: Ctx): string {
     "- Μην εφευρίσκεις ποτέ ώρες/τιμές. Χρησιμοποίησε τα εργαλεία.",
     "- Αφού κλείσει το ραντεβού, επιβεβαίωσε με τον κωδικό και πες ότι η πληρωμή γίνεται στο κατάστημα.",
     "- Αν ο πελάτης θέλει επανάληψη (π.χ. «κάθε μήνα»), βάλε repeat ανάλογα (2w/3w/1m).",
+    "",
+    "ΑΚΥΡΩΣΗ / ΑΛΛΑΓΗ ΡΑΝΤΕΒΟΥ:",
+    "- Για να ακυρώσεις ή να αλλάξεις ένα υπάρχον ραντεβού ΧΡΕΙΑΖΕΣΑΙ ΠΑΝΤΑ τον κωδικό κράτησης (π.χ. K27-ABC123) ΚΑΙ το τηλέφωνο με το οποίο κλείστηκε. Αν λείπει κάποιο, ζήτα το.",
+    "- Πρώτα κάλεσε find_booking για να επιβεβαιώσεις τα στοιχεία, και δείξε στον πελάτη τι ραντεβού βρέθηκε (υπηρεσία/μέρα/ώρα/κουρέας) πριν κάνεις οτιδήποτε.",
+    "- Για ΑΛΛΑΓΗ ώρας: έλεγξε πρώτα τη νέα ώρα με check_availability. Αν είναι διαθέσιμη, κάλεσε reschedule_booking. Αν όχι, πρότεινε κοντινές/πρώτη διαθέσιμη — ΜΗΝ αλλάξεις αυθαίρετα.",
+    "- Για ΑΚΥΡΩΣΗ: ζήτα ρητή επιβεβαίωση («να το ακυρώσω;») και μετά κάλεσε cancel_booking.",
+    `- Ακύρωση/αλλαγή επιτρέπεται μόνο έως ${bookingConfig.selfCancelHours} ώρες πριν· αλλιώς πες να τηλεφωνήσει στο κατάστημα.`,
+    "- Η αλλαγή κρατά τις ίδιες υπηρεσίες. Αν θέλει ΔΙΑΦΟΡΕΤΙΚΗ υπηρεσία, πες του ότι χρειάζεται ακύρωση και νέο ραντεβού.",
   ].join("\n");
 }
 
@@ -125,6 +174,48 @@ const tools: Anthropic.Tool[] = [
         repeat: { type: "string", enum: ["none", "2w", "3w", "1m"] },
       },
       required: ["serviceSlugs", "date", "time", "customerName", "customerPhone"],
+    },
+  },
+  {
+    name: "find_booking",
+    description: "Βρίσκει ένα υπάρχον ραντεβού για ταυτοποίηση. Απαιτεί κωδικό κράτησης ΚΑΙ τηλέφωνο. Χρησιμοποίησέ το πριν από ακύρωση/αλλαγή.",
+    input_schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        code: { type: "string", description: "κωδικός κράτησης, π.χ. K27-ABC123" },
+        customerPhone: { type: "string", description: "το τηλέφωνο με το οποίο κλείστηκε" },
+      },
+      required: ["code", "customerPhone"],
+    },
+  },
+  {
+    name: "reschedule_booking",
+    description: "Αλλάζει ώρα/ημέρα (και προαιρετικά κουρέα) υπάρχοντος ραντεβού, ΜΟΝΟ αν η νέα ώρα είναι διαθέσιμη. Απαιτεί κωδικό + τηλέφωνο. Κράτα τις ίδιες υπηρεσίες.",
+    input_schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        code: { type: "string" },
+        customerPhone: { type: "string" },
+        date: { type: "string", description: "νέα ημέρα YYYY-MM-DD" },
+        time: { type: "string", description: "νέα ώρα HH:mm" },
+        barberName: { type: "string", description: "νέος κουρέας (προαιρετικό)" },
+      },
+      required: ["code", "customerPhone", "date", "time"],
+    },
+  },
+  {
+    name: "cancel_booking",
+    description: "Ακυρώνει υπάρχον ραντεβού. Απαιτεί κωδικό + τηλέφωνο. Κάλεσέ το μόνο αφού ο πελάτης επιβεβαιώσει ρητά την ακύρωση.",
+    input_schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        code: { type: "string" },
+        customerPhone: { type: "string" },
+      },
+      required: ["code", "customerPhone"],
     },
   },
 ];
@@ -194,6 +285,42 @@ async function runTool(name: string, input: ToolInput, ctx: Ctx): Promise<unknow
       durationMin: b.durationMin,
       seriesBooked: repeat !== "none" ? res.occurrences.filter((o) => o.booked).length : undefined,
     };
+  }
+
+  if (name === "find_booking") {
+    const b = await findBookingForCustomer(String(input.code || ""), String(input.customerPhone || ""));
+    if (!b) return { found: false, error: MUTATION_ERRORS.NOT_FOUND };
+    const d = describeBooking(b);
+    return {
+      found: true,
+      ...d,
+      cancellable: b.status === "CONFIRMED" && (b.startAt.getTime() - Date.now()) / 3600000 >= bookingConfig.selfCancelHours,
+    };
+  }
+
+  if (name === "reschedule_booking") {
+    const b = await findBookingForCustomer(String(input.code || ""), String(input.customerPhone || ""));
+    if (!b) return { ok: false, error: MUTATION_ERRORS.NOT_FOUND };
+    const res = await rescheduleBooking(b.cancelToken, {
+      date: String(input.date || ""),
+      time: String(input.time || ""),
+      barberId,
+    });
+    if (!res.ok) return { ok: false, error: MUTATION_ERRORS[res.error] || "Δεν ήταν δυνατή η αλλαγή." };
+    return {
+      ok: true,
+      code: res.booking.code,
+      when: `${formatAthensDateLong(String(input.date))} στις ${input.time}`,
+      barberName: res.booking.barberName,
+    };
+  }
+
+  if (name === "cancel_booking") {
+    const b = await findBookingForCustomer(String(input.code || ""), String(input.customerPhone || ""));
+    if (!b) return { ok: false, error: MUTATION_ERRORS.NOT_FOUND };
+    const res = await cancelBookingByToken(b.cancelToken);
+    if (!res.ok) return { ok: false, error: MUTATION_ERRORS[res.reason || "UNKNOWN"] || "Δεν ήταν δυνατή η ακύρωση." };
+    return { ok: true, code: b.code };
   }
 
   return { error: "unknown tool" };
