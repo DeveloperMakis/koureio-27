@@ -54,18 +54,36 @@ function resolveBarberId(name: string | undefined, ctx: Ctx): string | undefined
 }
 
 /**
- * Ασφαλής ταυτοποίηση ραντεβού για τον (μη έμπιστο) πελάτη: απαιτείται ΚΑΙ ο
- * κωδικός κράτησης ΚΑΙ το τηλέφωνο με το οποίο έγινε. Αλλιώς δεν αποκαλύπτεται
- * τίποτα — ο βοηθός δεν μπορεί να ακυρώσει/αλλάξει ραντεβού τρίτου.
+ * Ταυτοποίηση ραντεβού με ΤΟ ΤΗΛΕΦΩΝΟ: επιστρέφει τα επερχόμενα (μελλοντικά,
+ * CONFIRMED) ραντεβού του πελάτη. Ο βοηθός ενεργεί μόνο πάνω σε αυτά.
  */
-async function findBookingForCustomer(code: string, phone: string) {
-  const c = (code || "").trim().toUpperCase();
+async function findBookingsForPhone(phone: string) {
   const key = nationalKey(phone);
-  if (!c || key.length < 10) return null;
-  const b = await prisma.booking.findUnique({ where: { code: c }, include: { barber: true } });
-  if (!b) return null;
-  if (nationalKey(b.customerPhone) !== key) return null; // το τηλέφωνο πρέπει να ταιριάζει
-  return b;
+  if (key.length < 10) return [];
+  const rows = await prisma.booking.findMany({
+    where: { status: "CONFIRMED", startAt: { gte: new Date() }, customerPhone: { contains: key } },
+    include: { barber: true },
+    orderBy: { startAt: "asc" },
+  });
+  return rows.filter((b) => nationalKey(b.customerPhone) === key);
+}
+
+type PhoneBooking = Awaited<ReturnType<typeof findBookingsForPhone>>[number];
+
+/**
+ * Διαλέγει ΕΝΑ ραντεβού από το τηλέφωνο. Αν υπάρχει μόνο ένα → αυτό. Αν δοθεί
+ * code (από προηγούμενο find_booking) → το συγκεκριμένο. Αν πολλά χωρίς code →
+ * multiple (ο βοηθός πρέπει να ρωτήσει ποιο).
+ */
+async function pickBooking(phone: string, code?: string): Promise<{ booking: PhoneBooking | null; multiple: boolean; list: PhoneBooking[] }> {
+  const list = await findBookingsForPhone(phone);
+  if (list.length === 0) return { booking: null, multiple: false, list };
+  if (code) {
+    const c = code.trim().toUpperCase();
+    return { booking: list.find((b) => b.code === c) || null, multiple: false, list };
+  }
+  if (list.length === 1) return { booking: list[0], multiple: false, list };
+  return { booking: null, multiple: true, list };
 }
 
 function describeBooking(b: { code: string; serviceName: string; startAt: Date; status: string; barber: { name: string } }) {
@@ -119,8 +137,9 @@ function systemPrompt(ctx: Ctx): string {
     "- Αν ο πελάτης θέλει επανάληψη (π.χ. «κάθε μήνα»), βάλε repeat ανάλογα (2w/3w/1m).",
     "",
     "ΑΚΥΡΩΣΗ / ΑΛΛΑΓΗ ΡΑΝΤΕΒΟΥ:",
-    "- Για να ακυρώσεις ή να αλλάξεις ένα υπάρχον ραντεβού ΧΡΕΙΑΖΕΣΑΙ ΠΑΝΤΑ τον κωδικό κράτησης (π.χ. K27-ABC123) ΚΑΙ το τηλέφωνο με το οποίο κλείστηκε. Αν λείπει κάποιο, ζήτα το.",
-    "- Πρώτα κάλεσε find_booking για να επιβεβαιώσεις τα στοιχεία, και δείξε στον πελάτη τι ραντεβού βρέθηκε (υπηρεσία/μέρα/ώρα/κουρέας) πριν κάνεις οτιδήποτε.",
+    "- Για να ακυρώσεις ή να αλλάξεις ραντεβού ζήτα ΜΟΝΟ το ΤΗΛΕΦΩΝΟ του πελάτη (10ψήφιο). ΜΗΝ ζητάς κωδικό κράτησης.",
+    "- Κάλεσε find_booking με το τηλέφωνο και δείξε στον πελάτη το/τα ραντεβού που βρέθηκαν (υπηρεσία/μέρα/ώρα/κουρέας) πριν κάνεις οτιδήποτε.",
+    "- Αν βρεθούν ΠΟΛΛΑ ραντεβού, ρώτα τον πελάτη ποιο εννοεί (με βάση μέρα/ώρα). Μετά στο reschedule_booking/cancel_booking πέρασε και το code εκείνου (το ξέρεις από το find_booking) μαζί με το τηλέφωνο.",
     "- Για ΑΛΛΑΓΗ ώρας: έλεγξε πρώτα τη νέα ώρα με check_availability. Αν είναι διαθέσιμη, κάλεσε reschedule_booking. Αν όχι, πρότεινε κοντινές/πρώτη διαθέσιμη — ΜΗΝ αλλάξεις αυθαίρετα.",
     "- Για ΑΚΥΡΩΣΗ: ζήτα ρητή επιβεβαίωση («να το ακυρώσω;») και μετά κάλεσε cancel_booking.",
     `- Ακύρωση/αλλαγή επιτρέπεται μόνο έως ${bookingConfig.selfCancelHours} ώρες πριν· αλλιώς πες να τηλεφωνήσει στο κατάστημα.`,
@@ -178,44 +197,43 @@ const tools: Anthropic.Tool[] = [
   },
   {
     name: "find_booking",
-    description: "Βρίσκει ένα υπάρχον ραντεβού για ταυτοποίηση. Απαιτεί κωδικό κράτησης ΚΑΙ τηλέφωνο. Χρησιμοποίησέ το πριν από ακύρωση/αλλαγή.",
+    description: "Βρίσκει τα επερχόμενα ραντεβού του πελάτη από το ΤΗΛΕΦΩΝΟ. Χρησιμοποίησέ το πριν από ακύρωση/αλλαγή για να δεις τι υπάρχει.",
     input_schema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        code: { type: "string", description: "κωδικός κράτησης, π.χ. K27-ABC123" },
-        customerPhone: { type: "string", description: "το τηλέφωνο με το οποίο κλείστηκε" },
+        customerPhone: { type: "string", description: "το τηλέφωνο με το οποίο κλείστηκε (10ψήφιο)" },
       },
-      required: ["code", "customerPhone"],
+      required: ["customerPhone"],
     },
   },
   {
     name: "reschedule_booking",
-    description: "Αλλάζει ώρα/ημέρα (και προαιρετικά κουρέα) υπάρχοντος ραντεβού, ΜΟΝΟ αν η νέα ώρα είναι διαθέσιμη. Απαιτεί κωδικό + τηλέφωνο. Κράτα τις ίδιες υπηρεσίες.",
+    description: "Αλλάζει ώρα/ημέρα (και προαιρετικά κουρέα), ΜΟΝΟ αν η νέα ώρα είναι διαθέσιμη. Ταυτοποίηση με τηλέφωνο. Αν ο πελάτης έχει πολλά ραντεβού, δώσε και code (από find_booking) για να ξεχωρίσει ποιο. Κράτα τις ίδιες υπηρεσίες.",
     input_schema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        code: { type: "string" },
         customerPhone: { type: "string" },
+        code: { type: "string", description: "προαιρετικό — μόνο για να ξεχωρίσει ανάμεσα σε πολλά ραντεβού" },
         date: { type: "string", description: "νέα ημέρα YYYY-MM-DD" },
         time: { type: "string", description: "νέα ώρα HH:mm" },
         barberName: { type: "string", description: "νέος κουρέας (προαιρετικό)" },
       },
-      required: ["code", "customerPhone", "date", "time"],
+      required: ["customerPhone", "date", "time"],
     },
   },
   {
     name: "cancel_booking",
-    description: "Ακυρώνει υπάρχον ραντεβού. Απαιτεί κωδικό + τηλέφωνο. Κάλεσέ το μόνο αφού ο πελάτης επιβεβαιώσει ρητά την ακύρωση.",
+    description: "Ακυρώνει ραντεβού. Ταυτοποίηση με τηλέφωνο. Αν ο πελάτης έχει πολλά ραντεβού, δώσε και code (από find_booking). Κάλεσέ το μόνο αφού ο πελάτης επιβεβαιώσει ρητά την ακύρωση.",
     input_schema: {
       type: "object",
       additionalProperties: false,
       properties: {
-        code: { type: "string" },
         customerPhone: { type: "string" },
+        code: { type: "string", description: "προαιρετικό — μόνο για να ξεχωρίσει ανάμεσα σε πολλά ραντεβού" },
       },
-      required: ["code", "customerPhone"],
+      required: ["customerPhone"],
     },
   },
 ];
@@ -288,20 +306,25 @@ async function runTool(name: string, input: ToolInput, ctx: Ctx): Promise<unknow
   }
 
   if (name === "find_booking") {
-    const b = await findBookingForCustomer(String(input.code || ""), String(input.customerPhone || ""));
-    if (!b) return { found: false, error: MUTATION_ERRORS.NOT_FOUND };
-    const d = describeBooking(b);
+    const list = await findBookingsForPhone(String(input.customerPhone || ""));
+    if (list.length === 0) return { found: false, error: MUTATION_ERRORS.NOT_FOUND };
     return {
       found: true,
-      ...d,
-      cancellable: b.status === "CONFIRMED" && (b.startAt.getTime() - Date.now()) / 3600000 >= bookingConfig.selfCancelHours,
+      count: list.length,
+      bookings: list.map((b) => ({
+        ...describeBooking(b),
+        cancellable: (b.startAt.getTime() - Date.now()) / 3600000 >= bookingConfig.selfCancelHours,
+      })),
     };
   }
 
   if (name === "reschedule_booking") {
-    const b = await findBookingForCustomer(String(input.code || ""), String(input.customerPhone || ""));
-    if (!b) return { ok: false, error: MUTATION_ERRORS.NOT_FOUND };
-    const res = await rescheduleBooking(b.cancelToken, {
+    const picked = await pickBooking(String(input.customerPhone || ""), input.code ? String(input.code) : undefined);
+    if (picked.multiple) {
+      return { ok: false, needsChoice: true, error: "Υπάρχουν περισσότερα από ένα ραντεβού. Ρώτα τον πελάτη ποιο εννοεί.", bookings: picked.list.map(describeBooking) };
+    }
+    if (!picked.booking) return { ok: false, error: MUTATION_ERRORS.NOT_FOUND };
+    const res = await rescheduleBooking(picked.booking.cancelToken, {
       date: String(input.date || ""),
       time: String(input.time || ""),
       barberId,
@@ -316,11 +339,14 @@ async function runTool(name: string, input: ToolInput, ctx: Ctx): Promise<unknow
   }
 
   if (name === "cancel_booking") {
-    const b = await findBookingForCustomer(String(input.code || ""), String(input.customerPhone || ""));
-    if (!b) return { ok: false, error: MUTATION_ERRORS.NOT_FOUND };
-    const res = await cancelBookingByToken(b.cancelToken);
+    const picked = await pickBooking(String(input.customerPhone || ""), input.code ? String(input.code) : undefined);
+    if (picked.multiple) {
+      return { ok: false, needsChoice: true, error: "Υπάρχουν περισσότερα από ένα ραντεβού. Ρώτα τον πελάτη ποιο εννοεί.", bookings: picked.list.map(describeBooking) };
+    }
+    if (!picked.booking) return { ok: false, error: MUTATION_ERRORS.NOT_FOUND };
+    const res = await cancelBookingByToken(picked.booking.cancelToken);
     if (!res.ok) return { ok: false, error: MUTATION_ERRORS[res.reason || "UNKNOWN"] || "Δεν ήταν δυνατή η ακύρωση." };
-    return { ok: true, code: b.code };
+    return { ok: true, code: picked.booking.code };
   }
 
   return { error: "unknown tool" };
